@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
@@ -10764,6 +10764,56 @@ function restartCameraFromPreview() {
   startCameraStream(false);
 }
 
+function findCameraDeviceByFacing(targetMode, excludeDeviceId, callback) {
+  if (!navigator || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    callback(null, 0);
+    return;
+  }
+  navigator.mediaDevices.enumerateDevices()
+    .then(function(devices) {
+      var videoInputs = (devices || []).filter(function(d) { return d && d.kind === 'videoinput'; });
+      if (videoInputs.length === 0) {
+        callback(null, 0);
+        return;
+      }
+
+      var isBackTarget = (targetMode === 'environment');
+      var keywords = isBackTarget
+        ? ['facing back', 'back', 'rear', 'environment', 'belakang']
+        : ['facing front', 'front', 'user', 'depan', 'selfie'];
+
+      var matched = null;
+      for (var i = 0; i < videoInputs.length; i++) {
+        var lbl = String(videoInputs[i].label || '').toLowerCase();
+        for (var k = 0; k < keywords.length; k++) {
+          if (lbl.indexOf(keywords[k]) !== -1) {
+            matched = videoInputs[i].deviceId;
+            break;
+          }
+        }
+        if (matched) break;
+      }
+
+      if (!matched && excludeDeviceId && videoInputs.length > 1) {
+        for (var j = 0; j < videoInputs.length; j++) {
+          if (videoInputs[j].deviceId && videoInputs[j].deviceId !== excludeDeviceId) {
+            matched = videoInputs[j].deviceId;
+            break;
+          }
+        }
+      }
+
+      if (!matched && isBackTarget && videoInputs.length > 1) {
+        matched = videoInputs[1].deviceId || videoInputs[videoInputs.length - 1].deviceId;
+      }
+
+      callback(matched || null, videoInputs.length);
+    })
+    .catch(function() {
+      callback(null, 0);
+    });
+}
+
 function switchCameraFacingMode() {
   if (appState.isSwitchingCamera) return;
   appState.isSwitchingCamera = true;
@@ -10774,7 +10824,7 @@ function switchCameraFacingMode() {
   appState.cameraFacingMode = (appState.cameraFacingMode === 'user') ? 'environment' : 'user';
   updateCameraFacingUI();
 
-  // Matikan stream kamera aktif dulu sebelum mengganti lensa (mencegah layar hitam di Android)
+  // Matikan stream & kosongkan video.srcObject lalu beri jeda 320ms agar driver kamera Android melepas lensa lama penuh
   stopCameraStream();
   setTimeout(function() {
     var modalEl = document.getElementById('modal-camera');
@@ -10784,7 +10834,7 @@ function switchCameraFacingMode() {
       return;
     }
     startCameraStream(true);
-  }, 140);
+  }, 320);
 }
 
 function handleCaptureButtonClick() {
@@ -10821,6 +10871,7 @@ function startCameraStream(isSwitchAttempt) {
   var note = document.getElementById('camera-instruction-note');
   var btnSwitch = document.getElementById('btn-switch-camera');
   var targetMode = appState.cameraFacingMode || 'user';
+  var excludeId = (targetMode === 'environment') ? (appState.lastFrontCameraId || appState.lastActiveCameraDeviceId || '') : (appState.lastBackCameraId || '');
 
   if (blockedCard) blockedCard.style.display = 'none';
   if (liveViewport) liveViewport.style.display = 'block';
@@ -10862,11 +10913,19 @@ function startCameraStream(isSwitchAttempt) {
     appState.cameraStream = stream;
     finishSwitchUnlock();
 
-    // Deteksi lensa aktual jika perangkat hanya memiliki 1 kamera (misal laptop)
     try {
       var tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
       if (tracks.length > 0 && tracks[0].getSettings) {
-        var actualFacing = tracks[0].getSettings().facingMode;
+        var trSet = tracks[0].getSettings();
+        var actualFacing = trSet.facingMode;
+        var actualDevId = trSet.deviceId || '';
+        if (actualDevId) {
+          appState.lastActiveCameraDeviceId = actualDevId;
+          if (actualFacing === 'user') appState.lastFrontCameraId = actualDevId;
+          else if (actualFacing === 'environment') appState.lastBackCameraId = actualDevId;
+          else if (targetMode === 'user') appState.lastFrontCameraId = actualDevId;
+          else if (targetMode === 'environment') appState.lastBackCameraId = actualDevId;
+        }
         if (actualFacing === 'user' || actualFacing === 'environment') {
           appState.cameraFacingMode = actualFacing;
           updateCameraFacingUI();
@@ -10893,7 +10952,71 @@ function startCameraStream(isSwitchAttempt) {
   // Pastikan stream lama bersih sebelum membuka lensa baru
   stopCameraStream();
 
-  // Percobaan 1: exact facingMode (memaksa pindah lensa depan <-> belakang di Android/iOS)
+  function handleCameraOpenFailure(errFinal, totalVideoDevices) {
+    if (isSwitchAttempt) {
+      // Jangan biarkan layar gelap: kembalikan ke lensa sebelumnya & beri alasan jelas
+      var prevMode = (targetMode === 'environment') ? 'user' : 'environment';
+      appState.cameraFacingMode = prevMode;
+      updateCameraFacingUI();
+      finishSwitchUnlock();
+      if (totalVideoDevices && totalVideoDevices <= 1) {
+        showToast("Perangkat ini hanya memiliki 1 kamera fisik.", "warning");
+      } else {
+        showToast("Kamera " + (targetMode === 'environment' ? 'belakang' : 'depan') + " gagal dibuka. Membuka kembali kamera sebelumnya.", "warning");
+      }
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: prevMode } }, audio: false })
+        .catch(function() { return navigator.mediaDevices.getUserMedia({ video: true, audio: false }); })
+        .then(function(fallbackStream) { bindStream(fallbackStream, true); })
+        .catch(function(errRestore) { activateLiveCameraBlockedUI(errRestore); });
+      return;
+    }
+    console.error("Semua percobaan akses kamera live gagal:", errFinal);
+    finishSwitchUnlock();
+    if (note) {
+      note.innerText = 'Izin kamera wajib aktif (pengambilan file dari galeri diblokir).';
+    }
+    activateLiveCameraBlockedUI(errFinal);
+  }
+
+  function tryDeviceIdOrIdealFallback() {
+    findCameraDeviceByFacing(targetMode, excludeId, function(matchedDevId, totalCams) {
+      if (matchedDevId) {
+        navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: matchedDevId } },
+          audio: false
+        })
+        .then(function(stream) { bindStream(stream, false); })
+        .catch(function(errDev) {
+          console.warn("DeviceId exact gagal:", errDev);
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: targetMode } }, audio: false })
+            .then(function(stream) { bindStream(stream, false); })
+            .catch(function(errIdeal) {
+              if (!isSwitchAttempt) {
+                navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                  .then(function(stream) { bindStream(stream, true); })
+                  .catch(function(errAny) { handleCameraOpenFailure(errAny, totalCams); });
+              } else {
+                handleCameraOpenFailure(errIdeal, totalCams);
+              }
+            });
+        });
+      } else {
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: targetMode } }, audio: false })
+          .then(function(stream) { bindStream(stream, false); })
+          .catch(function(errIdeal2) {
+            if (!isSwitchAttempt) {
+              navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                .then(function(stream) { bindStream(stream, true); })
+                .catch(function(errAny2) { handleCameraOpenFailure(errAny2, totalCams); });
+            } else {
+              handleCameraOpenFailure(errIdeal2, totalCams);
+            }
+          });
+      }
+    });
+  }
+
+  // Percobaan 1: exact facingMode + resolusi ideal
   navigator.mediaDevices.getUserMedia({
     video: {
       facingMode: { exact: targetMode },
@@ -10904,30 +11027,16 @@ function startCameraStream(isSwitchAttempt) {
   })
   .then(function(stream) { bindStream(stream, false); })
   .catch(function(err1) {
-    console.warn("Exact facingMode " + targetMode + " gagal, mencoba ideal facingMode:", err1);
-    // Percobaan 2: ideal facingMode
+    console.warn("Exact facingMode " + targetMode + " (640x480) gagal, mencoba tanpa batas resolusi:", err1);
+    // Percobaan 2: exact facingMode tanpa batasan lebar/tinggi (menghindari penolakan resolusi kamera belakang Android)
     navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: targetMode },
-        width: { ideal: 640 },
-        height: { ideal: 480 }
-      },
+      video: { facingMode: { exact: targetMode } },
       audio: false
     })
     .then(function(stream) { bindStream(stream, false); })
     .catch(function(err2) {
-      console.warn("Ideal facingMode " + targetMode + " gagal, mencoba kamera default:", err2);
-      // Percobaan 3: fallback sembarang video stream perangkat
-      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then(function(stream) { bindStream(stream, true); })
-        .catch(function(err3) {
-          console.error("Semua percobaan akses kamera live gagal:", err3);
-          finishSwitchUnlock();
-          if (note) {
-            note.innerText = 'Izin kamera wajib aktif (pengambilan file dari galeri diblokir).';
-          }
-          activateLiveCameraBlockedUI(err3);
-        });
+      console.warn("Exact facingMode tanpa resolusi gagal, mencoba enumerateDevices deviceId:", err2);
+      tryDeviceIdOrIdealFallback();
     });
   });
 }
@@ -10938,8 +11047,15 @@ function stopCameraStream() {
     appState.cameraWatchdog = null;
   }
   if (appState.cameraStream) {
-    appState.cameraStream.getTracks().forEach(function(track) { track.stop(); });
+    try {
+      appState.cameraStream.getTracks().forEach(function(track) { track.stop(); });
+    } catch (eStop) {}
     appState.cameraStream = null;
+  }
+  var video = document.getElementById('camera-video');
+  if (video) {
+    try { video.pause(); } catch (ePause) {}
+    try { video.srcObject = null; } catch (eSrc) {}
   }
 }
 
@@ -12074,26 +12190,51 @@ function initLaporanPerKaryawan() {
   populateLaporanEmployeeDropdown(userList);
 
   var monthSelect = document.getElementById('lpk-select-month');
+  var nowDate = new Date();
   if (monthSelect && !monthSelect.dataset.initialized) {
-    monthSelect.value = "10"; // Default Oktober sesuai data riil aktif
+    monthSelect.value = String(nowDate.getMonth() + 1); // Otomatis bulan berjalan saat ini
     monthSelect.dataset.initialized = "true";
   }
 
   var yearSelect = document.getElementById('lpk-select-year');
   if (yearSelect && !yearSelect.dataset.initialized) {
-    yearSelect.value = "2026";
+    var curYrStr = String(nowDate.getFullYear());
+    for (var yi = 0; yi < yearSelect.options.length; yi++) {
+      if (yearSelect.options[yi].value === curYrStr) {
+        yearSelect.value = curYrStr;
+        break;
+      }
+    }
     yearSelect.dataset.initialized = "true";
   }
 }
 
-function loadEmployeeMonthlyReport() {
+function loadEmployeeMonthlyReport(overrideNip) {
   var empSelect = document.getElementById('lpk-select-emp');
   var monthSelect = document.getElementById('lpk-select-month');
   var yearSelect = document.getElementById('lpk-select-year');
+  var curNow = new Date();
 
-  var nip = empSelect ? empSelect.value : 'ALL';
-  var month = monthSelect ? parseInt(monthSelect.value, 10) : 10;
-  var year = yearSelect ? parseInt(yearSelect.value, 10) : 2026;
+  var nip = (overrideNip !== undefined && overrideNip !== null && String(overrideNip).trim() !== '')
+    ? String(overrideNip).trim()
+    : (empSelect ? empSelect.value : 'ALL');
+
+  if (empSelect && nip && empSelect.value !== nip) {
+    var hasOpt = false;
+    for (var oi = 0; oi < empSelect.options.length; oi++) {
+      if (empSelect.options[oi].value === nip) { hasOpt = true; break; }
+    }
+    if (!hasOpt) {
+      var tempOpt = document.createElement('option');
+      tempOpt.value = nip;
+      tempOpt.textContent = nip + ' (Karyawan Terpilih)';
+      empSelect.appendChild(tempOpt);
+    }
+    empSelect.value = nip;
+  }
+
+  var month = monthSelect ? parseInt(monthSelect.value, 10) : (curNow.getMonth() + 1);
+  var year = yearSelect ? parseInt(yearSelect.value, 10) : curNow.getFullYear();
   var adminNip = appState.currentUser ? appState.currentUser.nip : '';
 
   showToast("Memuat laporan rekap bulanan...", 'info');
@@ -12257,11 +12398,62 @@ function renderEmployeeMonthlyReportUI(rep) {
 }
 
 function viewSingleEmployeeReport(nip) {
-  var empSelect = document.getElementById('lpk-select-emp');
-  if (empSelect) {
-    empSelect.value = nip;
-    loadEmployeeMonthlyReport();
+  loadEmployeeMonthlyReport(nip);
+}
+
+function getMonthlyRowVisualTheme(shiftStr, statusStr, jamLemburStr, rowIdx) {
+  var sh = String(shiftStr || '').toLowerCase().trim();
+  var st = String(statusStr || '').toLowerCase();
+  var ot = String(jamLemburStr || '').toLowerCase().trim();
+
+  var isLibur = (sh === 'libur' || st.indexOf('libur') !== -1);
+  var isIzin = (!isLibur && (st.indexOf('izin') !== -1 || st.indexOf('cuti') !== -1 || st.indexOf('sakit') !== -1));
+  var hasOtHours = (ot !== '' && ot !== '-' && ot !== '0 jam' && ot !== '0 jam 0 menit' && ot !== '0 jam 00 menit' && ot !== '0.0 jam');
+  var isLembur = (!isLibur && !isIzin && (st.indexOf('lembur') !== -1 || hasOtHours));
+  var isOutside = (!isLibur && !isIzin && !isLembur && (st.indexOf('luar radius') !== -1 || st.indexOf('tanpa gps') !== -1));
+
+  if (isLibur) {
+    return { category: 'LIBUR', bgHex: 'FEF3C7', textHex: '92400E', badgeBgHex: 'FDE68A', badgeTextHex: '78350F', bold: true };
   }
+  if (isIzin) {
+    return { category: 'IZIN', bgHex: 'E0F2FE', textHex: '0369A1', badgeBgHex: 'BAE6FD', badgeTextHex: '075985', bold: true };
+  }
+  if (isLembur) {
+    return { category: 'LEMBUR', bgHex: 'EDE9FE', textHex: '5B21B6', badgeBgHex: 'DDD6FE', badgeTextHex: '4C1D95', bold: true };
+  }
+  if (isOutside) {
+    return { category: 'LUAR_RADIUS', bgHex: 'FFF7ED', textHex: '9A3412', badgeBgHex: 'FFEDD5', badgeTextHex: '9A3412', bold: false };
+  }
+  return {
+    category: 'NORMAL',
+    bgHex: (rowIdx % 2 === 1) ? 'F8FAFC' : 'FFFFFF',
+    textHex: '0F172A',
+    badgeBgHex: 'DCFCE7',
+    badgeTextHex: '166534',
+    bold: false
+  };
+}
+
+function getShiftBadgeVisualTheme(shiftStr) {
+  var sh = String(shiftStr || '').toLowerCase().trim();
+  if (sh === 'pagi') return { bgHex: 'FFF7ED', textHex: 'C2410C' };
+  if (sh === 'midle') return { bgHex: 'E0F2FE', textHex: '0369A1' };
+  if (sh === 'sore') return { bgHex: 'F3E8FF', textHex: '7E22CE' };
+  if (sh === 'full') return { bgHex: 'DCFCE7', textHex: '15803D' };
+  if (sh === 'libur') return { bgHex: 'FDE68A', textHex: '78350F' };
+  return { bgHex: 'F1F5F9', textHex: '334155' };
+}
+
+function formatReportDateWithDay(dateStr) {
+  var raw = String(dateStr || '').trim();
+  if (!raw) return '-';
+  var dp = raw.split('-');
+  var dtObj = (dp.length === 3)
+    ? new Date(parseInt(dp[0], 10), parseInt(dp[1], 10) - 1, parseInt(dp[2], 10))
+    : new Date(raw);
+  if (isNaN(dtObj.getTime())) return raw;
+  var dayShort = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+  return raw + " (" + dayShort[dtObj.getDay()] + ")";
 }
 
 function printEmployeeMonthlyReportPdf() {
@@ -12297,26 +12489,32 @@ function printEmployeeMonthlyReportPdf() {
 
   var contentHtml = '';
   if (rep.isAll) {
-    contentHtml += '<div style="text-align: center; margin-bottom: 16px;">' +
-      '<h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #0f172a; text-transform: uppercase;">MATRIKS REKAPITULASI PRESENSI SELURUH KARYAWAN</h3>' +
-      '<p style="margin: 4px 0 0 0; font-size: 11px; color: #64748b;">Periode: <strong>' + rep.bulanText + ' ' + rep.tahun + '</strong> &bull; Dicetak: ' + new Date().toLocaleString('id-ID') + '</p>' +
+    contentHtml += '<div style="background: #0f172a; color: #ffffff; border-radius: 8px; padding: 10px 14px; text-align: center; margin-bottom: 12px;">' +
+      '<h3 style="margin: 0; font-size: 15px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;">MATRIKS REKAPITULASI PRESENSI SELURUH KARYAWAN</h3>' +
+      '<p style="margin: 4px 0 0 0; font-size: 11px; color: #bae6fd;">Periode: <strong style="color: #ffffff;">' + rep.bulanText + ' ' + rep.tahun + '</strong> &bull; Dicetak: ' + new Date().toLocaleString('id-ID') + '</p>' +
+      '</div>' +
+      '<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 9.5px; font-weight: 700;">' +
+        '<span style="background: #ecfdf5; color: #166534; border: 1px solid #a7f3d0; padding: 3px 8px; border-radius: 4px;">Hijau: Total Masuk</span>' +
+        '<span style="background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; padding: 3px 8px; border-radius: 4px;">Kuning Amber: Hari Libur / Off</span>' +
+        '<span style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 3px 8px; border-radius: 4px;">Biru: Izin / Cuti</span>' +
+        '<span style="background: #ede9fe; color: #5b21b6; border: 1px solid #ddd6fe; padding: 3px 8px; border-radius: 4px;">Ungu: Jam Lembur</span>' +
       '</div>' +
       '<table style="width: 100%; border-collapse: collapse; font-size: 10px;">' +
         '<thead>' +
-          '<tr style="background: #0f172a; color: #ffffff;">' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: left;">NIP</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: left;">Nama</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: left;">Departemen</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: left;">Cabang</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Masuk</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Pagi</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Midle</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Sore</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Full</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Libur</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: center;">Izin</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: right;">Jam Kerja</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 6px; text-align: right;">Lembur</th>' +
+          '<tr style="background: #0f766e; color: #ffffff;">' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: left;">NIP</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: left;">Nama</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: left;">Departemen</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: left;">Cabang</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Masuk</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Pagi</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Midle</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Sore</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Full</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Libur</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: center;">Izin</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: right;">Jam Kerja</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px; text-align: right;">Lembur</th>' +
           '</tr>' +
         '</thead>' +
         '<tbody>';
@@ -12325,20 +12523,23 @@ function printEmployeeMonthlyReportPdf() {
       var itm = mList[i];
       var sc = itm.shiftCounts || {};
       var bgRow = (i % 2 === 1) ? '#f8fafc' : '#ffffff';
-      contentHtml += '<tr style="background: ' + bgRow + '; border-bottom: 1px solid #cbd5e1;">' +
+      var liburBg = (itm.totalLibur > 0) ? '#fef3c7' : bgRow;
+      var izinBg = (itm.totalIzin > 0) ? '#e0f2fe' : bgRow;
+      var lemburBg = (itm.totalLemburJam > 0) ? '#ede9fe' : bgRow;
+      contentHtml += '<tr style="background: ' + bgRow + '; page-break-inside: avoid;">' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 600;">' + itm.nip + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 700;">' + itm.nama + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 700; color: #0f172a;">' + itm.nama + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px;">' + itm.departemen + ' (' + (itm.subDepartemen || '-') + ')</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px;">' + itm.cabangId + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; color: #059669;">' + itm.totalMasuk + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; background: #ecfdf5; color: #166534;">' + itm.totalMasuk + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Pagi || 0) + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Midle || 0) + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Sore || 0) + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Full || 0) + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; color: #d97706;">' + itm.totalLibur + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + itm.totalIzin + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; background: ' + liburBg + '; color: #92400e;">' + itm.totalLibur + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; background: ' + izinBg + '; color: #0369a1;">' + itm.totalIzin + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: right;">' + itm.totalJamKerja + ' Jam</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: right; font-weight: 600; color: #4f46e5;">' + itm.totalLemburJam + ' Jam</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: right; font-weight: 700; background: ' + lemburBg + '; color: #5b21b6;">' + itm.totalLemburJam + ' Jam</td>' +
       '</tr>';
     }
     contentHtml += '</tbody></table>';
@@ -12346,80 +12547,95 @@ function printEmployeeMonthlyReportPdf() {
     var emp = rep.employee || {};
     var sc = rep.shiftCounts || {};
     contentHtml += 
-      '<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">' +
+      '<div style="background: #0f172a; color: #ffffff; border-radius: 8px 8px 0 0; padding: 8px 14px; font-size: 12px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;">IDENTITAS PEGAWAI &amp; PERIODE LAPORAN</div>' +
+      '<div style="background: #f0fdfa; border: 1px solid #99f6e4; border-top: none; border-radius: 0 0 8px 8px; padding: 10px 14px; margin-bottom: 12px;">' +
         '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' +
           '<tr>' +
-            '<td style="width: 15%; color: #64748b; padding: 3px 0;">Nama Pegawai</td>' +
-            '<td style="width: 35%; font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + emp.nama + '</td>' +
-            '<td style="width: 15%; color: #64748b; padding: 3px 0;">Cabang Penugasan</td>' +
-            '<td style="width: 35%; font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + emp.cabangId + '</td>' +
+            '<td style="width: 16%; color: #0f766e; font-weight: 700; padding: 3px 0;">Nama Pegawai</td>' +
+            '<td style="width: 34%; font-weight: 800; color: #0f172a; padding: 3px 0;">: ' + (emp.nama || '-') + '</td>' +
+            '<td style="width: 17%; color: #0f766e; font-weight: 700; padding: 3px 0;">Cabang Penugasan</td>' +
+            '<td style="width: 33%; font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + (emp.cabangId || '-') + '</td>' +
           '</tr>' +
           '<tr>' +
-            '<td style="color: #64748b; padding: 3px 0;">NIP Pegawai</td>' +
-            '<td style="font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + emp.nip + '</td>' +
-            '<td style="color: #64748b; padding: 3px 0;">Periode Laporan</td>' +
-            '<td style="font-weight: 700; color: #059669; padding: 3px 0;">: ' + rep.bulanText + ' ' + rep.tahun + '</td>' +
+            '<td style="color: #0f766e; font-weight: 700; padding: 3px 0;">NIP Pegawai</td>' +
+            '<td style="font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + (emp.nip || '-') + '</td>' +
+            '<td style="color: #0f766e; font-weight: 700; padding: 3px 0;">Periode Laporan</td>' +
+            '<td style="font-weight: 800; color: #047857; padding: 3px 0;">: ' + rep.bulanText + ' ' + rep.tahun + '</td>' +
           '</tr>' +
           '<tr>' +
-            '<td style="color: #64748b; padding: 3px 0;">Departemen / Posisi</td>' +
-            '<td style="color: #0f172a; padding: 3px 0;">: ' + emp.departemen + ' (' + (emp.subDepartemen || '-') + ')</td>' +
-            '<td style="color: #64748b; padding: 3px 0;">Dicetak Pada</td>' +
-            '<td style="color: #0f172a; padding: 3px 0;">: ' + new Date().toLocaleString('id-ID') + '</td>' +
+            '<td style="color: #0f766e; font-weight: 700; padding: 3px 0;">Departemen / Posisi</td>' +
+            '<td style="color: #0f172a; font-weight: 600; padding: 3px 0;">: ' + (emp.departemen || '-') + ' (' + (emp.subDepartemen || '-') + ')</td>' +
+            '<td style="color: #0f766e; font-weight: 700; padding: 3px 0;">Dicetak Pada</td>' +
+            '<td style="color: #475569; padding: 3px 0;">: ' + new Date().toLocaleString('id-ID') + '</td>' +
           '</tr>' +
         '</table>' +
       '</div>' +
-      '<div style="display: flex; gap: 8px; margin-bottom: 14px;">' +
+      '<div style="display: flex; gap: 8px; margin-bottom: 12px;">' +
         '<div style="flex: 1; border: 1px solid #10b981; border-radius: 6px; padding: 8px 10px; text-align: center; background: #ecfdf5;">' +
-          '<div style="font-size: 10px; font-weight: 700; color: #065f46;">TOTAL HARI MASUK</div>' +
+          '<div style="font-size: 9.5px; font-weight: 700; color: #065f46;">TOTAL HARI MASUK</div>' +
           '<div style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 2px;">' + rep.totalMasuk + ' Hari</div>' +
         '</div>' +
         '<div style="flex: 2; border: 1px solid #0284c7; border-radius: 6px; padding: 8px 10px; text-align: center; background: #f0f9ff;">' +
-          '<div style="font-size: 10px; font-weight: 700; color: #0369a1;">RINCIAN SHIFT KERJA</div>' +
-          '<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 4px;">' +
+          '<div style="font-size: 9.5px; font-weight: 700; color: #0369a1;">RINCIAN SHIFT KERJA</div>' +
+          '<div style="font-size: 11.5px; font-weight: 700; color: #0f172a; margin-top: 4px;">' +
             'Pagi: ' + (sc.Pagi || 0) + ' &bull; Midle: ' + (sc.Midle || 0) + ' &bull; Sore: ' + (sc.Sore || 0) + ' &bull; Full: ' + (sc.Full || 0) +
           '</div>' +
         '</div>' +
-        '<div style="flex: 1; border: 1px solid #f59e0b; border-radius: 6px; padding: 8px 10px; text-align: center; background: #fffbeb;">' +
-          '<div style="font-size: 10px; font-weight: 700; color: #92400e;">TOTAL HARI LIBUR</div>' +
-          '<div style="font-size: 16px; font-weight: 800; color: #d97706; margin-top: 2px;">' + rep.totalLibur + ' Hari</div>' +
+        '<div style="flex: 1; border: 1px solid #f59e0b; border-radius: 6px; padding: 8px 10px; text-align: center; background: #fef3c7;">' +
+          '<div style="font-size: 9.5px; font-weight: 700; color: #92400e;">TOTAL HARI LIBUR</div>' +
+          '<div style="font-size: 16px; font-weight: 800; color: #b45309; margin-top: 2px;">' + rep.totalLibur + ' Hari</div>' +
         '</div>' +
-        '<div style="flex: 1; border: 1px solid #6366f1; border-radius: 6px; padding: 8px 10px; text-align: center; background: #eef2ff;">' +
-          '<div style="font-size: 10px; font-weight: 700; color: #3730a3;">TOTAL JAM &amp; LEMBUR</div>' +
-          '<div style="font-size: 12px; font-weight: 700; color: #4f46e5; margin-top: 4px;">' + rep.totalJamKerja + ' Jam (' + rep.totalLemburJam + ' Lembur)</div>' +
+        '<div style="flex: 1; border: 1px solid #6366f1; border-radius: 6px; padding: 8px 10px; text-align: center; background: #ede9fe;">' +
+          '<div style="font-size: 9.5px; font-weight: 700; color: #4c1d95;">TOTAL JAM &amp; LEMBUR</div>' +
+          '<div style="font-size: 11.5px; font-weight: 700; color: #5b21b6; margin-top: 4px;">' + rep.totalJamKerja + ' Jam (' + rep.totalLemburJam + ' Lembur)</div>' +
         '</div>' +
       '</div>' +
-      '<div style="font-size: 12px; font-weight: 800; color: #0f172a; margin-bottom: 6px; text-transform: uppercase;">Rincian Presensi Kehadiran Harian</div>' +
-      '<table style="width: 100%; border-collapse: collapse; font-size: 10px;">' +
+      '<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">' +
+        '<div style="font-size: 11.5px; font-weight: 800; color: #0f172a; text-transform: uppercase;">Rincian Presensi Kehadiran Harian</div>' +
+        '<div style="display: flex; gap: 6px; font-size: 9px; font-weight: 700;">' +
+          '<span style="background: #ffffff; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px;">Kerja Normal</span>' +
+          '<span style="background: #ede9fe; color: #5b21b6; border: 1px solid #ddd6fe; padding: 2px 6px; border-radius: 4px;">Ada Lembur</span>' +
+          '<span style="background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; padding: 2px 6px; border-radius: 4px;">Libur / Off</span>' +
+          '<span style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 2px 6px; border-radius: 4px;">Izin / Cuti</span>' +
+        '</div>' +
+      '</div>' +
+      '<table style="width: 100%; border-collapse: collapse; font-size: 9.8px;">' +
         '<thead>' +
-          '<tr style="background: #0f172a; color: #ffffff;">' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; width: 24px; text-align: center;">No</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: left;">Tanggal</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Shift</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Masuk</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Keluar</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Durasi</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Lembur</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: center;">Status</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: left;">Cabang</th>' +
-            '<th style="border: 1px solid #94a3b8; padding: 5px; text-align: left;">Keterangan</th>' +
+          '<tr style="background: #0f766e; color: #ffffff;">' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 4px; width: 24px; text-align: center;">No</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 5px; text-align: left;">Tanggal</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 5px; text-align: center;">Shift</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 4px; text-align: center;">Masuk</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 4px; text-align: center;">Pulang</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 4px; text-align: center;">Durasi</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 4px; text-align: center;">Lembur</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 5px; text-align: center;">Status</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 5px; text-align: left;">Cabang</th>' +
+            '<th style="border: 1px solid #0d9488; padding: 6px 5px; text-align: left;">Keterangan</th>' +
           '</tr>' +
         '</thead>' +
         '<tbody>';
     var dList = rep.dailyRecords || [];
     for (var j = 0; j < dList.length; j++) {
       var r = dList[j];
-      var bgDaily = (j % 2 === 1) ? '#f8fafc' : '#ffffff';
-      contentHtml += '<tr style="background: ' + bgDaily + '; border-bottom: 1px solid #cbd5e1;">' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + (j + 1) + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; font-weight: 700;">' + r.tanggal + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + r.shift + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + r.jamMasuk + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + r.jamKeluar + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + r.lamaJam + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center; font-weight: 600; color: #4f46e5;">' + r.jamLembur + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center;">' + r.status + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px;">' + r.cabang + '</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 4px; color: #64748b;">' + (r.keterangan || '-') + '</td>' +
+      var theme = getMonthlyRowVisualTheme(r.shift, r.status, r.jamLembur, j);
+      var shTheme = getShiftBadgeVisualTheme(r.shift);
+      var dateWithDay = formatReportDateWithDay(r.tanggal);
+      var weightCss = theme.bold ? 'font-weight: 700;' : '';
+      var jamKeluarShow = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : r.jamKeluar;
+      var jamMasukShow = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : r.jamMasuk;
+
+      contentHtml += '<tr style="background: #' + theme.bgHex + '; color: #' + theme.textHex + '; page-break-inside: avoid;">' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; ' + weightCss + '">' + (j + 1) + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 700; white-space: nowrap;">' + dateWithDay + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;"><span style="background: #' + shTheme.bgHex + '; color: #' + shTheme.textHex + '; padding: 2px 7px; border-radius: 4px; font-weight: 700; display: inline-block;">' + (r.shift || '-') + '</span></td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; ' + weightCss + '">' + jamMasukShow + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; ' + weightCss + '">' + jamKeluarShow + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; font-weight: 700;">' + r.lamaJam + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; font-weight: 700; color: #' + (theme.category === 'LEMBUR' ? '5b21b6' : theme.textHex) + ';">' + r.jamLembur + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;"><span style="background: #' + theme.badgeBgHex + '; color: #' + theme.badgeTextHex + '; padding: 2px 6px; border-radius: 4px; font-weight: 700; display: inline-block;">' + (r.status || '-') + '</span></td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; ' + weightCss + '">' + (r.cabang || '-') + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; ' + weightCss + '">' + (r.keterangan || '-') + '</td>' +
       '</tr>';
     }
     contentHtml += '</tbody></table>' +
@@ -12432,13 +12648,13 @@ function printEmployeeMonthlyReportPdf() {
         '<div style="text-align: center; width: 200px;">' +
           'Pegawai Yang Bersangkutan,' +
           '<div style="height: 48px;"></div>' +
-          '<strong>( ' + emp.nama + ' )</strong>' +
+          '<strong>( ' + (emp.nama || '-') + ' )</strong>' +
         '</div>' +
       '</div>';
   }
 
   cloneWrapper.innerHTML = 
-    '<table style="width: 100%; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px; border-collapse: collapse;"><tr>' +
+    '<table style="width: 100%; border-bottom: 2px solid #0f766e; padding-bottom: 8px; margin-bottom: 12px; border-collapse: collapse;"><tr>' +
       '<td style="width: 70px; vertical-align: middle;">' + (cLogo ? '<img src="' + cLogo + '" style="height: 50px; max-width: 65px; object-fit: contain; border-radius: 4px;">' : '') + '</td>' +
       '<td style="vertical-align: middle;">' +
         '<h2 style="font-size: 17px; font-weight: 800; color: #0f172a; margin: 0; text-transform: uppercase;">' + cName + '</h2>' +
@@ -12484,8 +12700,8 @@ function fallbackPrintReportWindow(rep, cName, cAddr, cTelp, cEmail, cLogo, cont
     return;
   }
   var fullDoc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Presensi - ' + cName + '</title>' +
-    '<style>@page { size: A4 ' + (rep.isAll ? 'landscape' : 'portrait') + '; margin: 10mm; } body { font-family: sans-serif; color: #1e293b; margin: 0; padding: 10px; }</style></head><body>' +
-    '<table style="width: 100%; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;"><tr>' +
+    '<style>@page { size: A4 ' + (rep.isAll ? 'landscape' : 'portrait') + '; margin: 10mm; } body { font-family: sans-serif; color: #1e293b; margin: 0; padding: 10px; } thead { display: table-header-group; } tr { page-break-inside: avoid; }</style></head><body>' +
+    '<table style="width: 100%; border-bottom: 2px solid #0f766e; padding-bottom: 8px; margin-bottom: 12px;"><tr>' +
       '<td><h2 style="margin: 0;">' + cName + '</h2><p style="margin: 0; font-size: 11px; color: #64748b;">' + cAddr + ' &bull; Telp: ' + cTelp + '</p></td>' +
       '<td style="text-align: right;"><h3 style="margin: 0; color: #0f766e;">LAPORAN PRESENSI</h3></td>' +
     '</tr></table>' +
@@ -12495,6 +12711,41 @@ function fallbackPrintReportWindow(rep, cName, cAddr, cTelp, cEmail, cLogo, cont
   printWin.document.write(fullDoc);
   printWin.document.close();
   setTimeout(function() { printWin.focus(); printWin.print(); }, 400);
+}
+
+function makeExcelCellBorder(rgbHex) {
+  var c = { style: 'thin', color: { rgb: rgbHex || 'CBD5E1' } };
+  return { top: c, bottom: c, left: c, right: c };
+}
+
+function applyExcelRangeStyle(ws, startRowIdx, endRowIdx, startColIdx, endColIdx, styleObj, forceText) {
+  for (var r = startRowIdx; r <= endRowIdx; r++) {
+    for (var c = startColIdx; c <= endColIdx; c++) {
+      var addr = XLSX.utils.encode_cell({ r: r, c: c });
+      if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+      if (forceText) {
+        ws[addr].t = 's';
+        ws[addr].z = '@';
+      }
+      ws[addr].s = styleObj;
+    }
+  }
+}
+
+function computeExcelAutoColWidths(aoaData, headerRowIndex, minWidths, maxColCap) {
+  var colCount = (aoaData[headerRowIndex] || []).length;
+  var widths = [];
+  for (var c = 0; c < colCount; c++) {
+    var maxLen = (minWidths && minWidths[c]) ? minWidths[c] : 10;
+    for (var r = headerRowIndex; r < aoaData.length; r++) {
+      var val = (aoaData[r] && aoaData[r][c] !== undefined && aoaData[r][c] !== null) ? String(aoaData[r][c]) : '';
+      if (val.length + 3 > maxLen) {
+        maxLen = val.length + 3;
+      }
+    }
+    widths.push({ wch: Math.min(maxLen, maxColCap || 46) });
+  }
+  return widths;
 }
 
 function exportEmployeeMonthlyReportExcel() {
@@ -12512,55 +12763,271 @@ function exportEmployeeMonthlyReportExcel() {
   try {
     var ws;
     var filename = '';
+    var companyName = (appState.settings && (appState.settings.NAMA_PERUSAHAAN || appState.settings.APP_NAME)) ? (appState.settings.NAMA_PERUSAHAAN || appState.settings.APP_NAME) : 'GATA FROZEN';
+    var printedAt = new Date().toLocaleString('id-ID') + ' WIB';
+
+    var bannerStyle = {
+      font: { name: 'Calibri', sz: 13, bold: true, color: { rgb: 'FFFFFF' } },
+      fill: { fgColor: { rgb: '0F172A' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: makeExcelCellBorder('0F172A')
+    };
+    var subBannerStyle = {
+      font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'BAE6FD' } },
+      fill: { fgColor: { rgb: '1E293B' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: makeExcelCellBorder('1E293B')
+    };
+    var infoLabelStyle = {
+      font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '134E4A' } },
+      fill: { fgColor: { rgb: 'CCFBF1' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+      border: makeExcelCellBorder('99F6E4')
+    };
+    var infoValueStyle = {
+      font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '0F172A' } },
+      fill: { fgColor: { rgb: 'F0FDFA' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+      border: makeExcelCellBorder('99F6E4')
+    };
+    var tableHeaderStyle = {
+      font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+      fill: { fgColor: { rgb: '0F766E' } },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: makeExcelCellBorder('0D9488')
+    };
 
     if (rep.isAll) {
       filename = "Rekap_Matriks_Seluruh_Karyawan_" + rep.bulanText + "_" + rep.tahun + ".xlsx";
-      var mRows = [];
       var mList = rep.matrixList || [];
+      var sumMasuk = 0, sumLibur = 0, sumIzin = 0, sumJam = 0, sumLembur = 0;
+      for (var sIdx = 0; sIdx < mList.length; sIdx++) {
+        sumMasuk += Number(mList[sIdx].totalMasuk || 0);
+        sumLibur += Number(mList[sIdx].totalLibur || 0);
+        sumIzin += Number(mList[sIdx].totalIzin || 0);
+        sumJam += Number(mList[sIdx].totalJamKerja || 0);
+        sumLembur += Number(mList[sIdx].totalLemburJam || 0);
+      }
+
+      var mAoa = [
+        ["MATRIKS REKAPITULASI PRESENSI SELURUH KARYAWAN — " + companyName.toUpperCase(), "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        ["Periode: " + rep.bulanText + " " + rep.tahun + "   |   Total Karyawan: " + mList.length + " Orang   |   Diekspor: " + printedAt, "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        [
+          "Ringkasan Akumulasi:", "", "", "", "",
+          "Masuk: " + sumMasuk + " Hr", "", "", "", "",
+          "Libur: " + sumLibur + " Hr",
+          "Izin: " + sumIzin + " Hr",
+          "Kerja: " + sumJam.toFixed(1) + " Jam",
+          "Lembur: " + sumLembur.toFixed(1) + " Jam"
+        ],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+        [
+          "NIP", "Nama Karyawan", "Departemen", "Sub-Departemen", "Cabang",
+          "Total Masuk (Hari)", "Shift Pagi", "Shift Midle", "Shift Sore", "Shift Full",
+          "Total Libur (Hari)", "Total Izin (Hari)", "Total Jam Kerja", "Total Jam Lembur"
+        ]
+      ];
+
       for (var i = 0; i < mList.length; i++) {
         var it = mList[i];
         var sc = it.shiftCounts || {};
-        mRows.push({
-          "NIP": it.nip,
-          "Nama Karyawan": it.nama,
-          "Departemen": it.departemen,
-          "Sub-Departemen": it.subDepartemen,
-          "Cabang": it.cabangId,
-          "Total Masuk (Hari)": it.totalMasuk,
-          "Shift Pagi": sc.Pagi || 0,
-          "Shift Midle": sc.Midle || 0,
-          "Shift Sore": sc.Sore || 0,
-          "Shift Full": sc.Full || 0,
-          "Total Libur (Hari)": it.totalLibur,
-          "Total Izin (Hari)": it.totalIzin,
-          "Total Jam Kerja": it.totalJamKerja,
-          "Total Jam Lembur": it.totalLemburJam
-        });
+        mAoa.push([
+          String(it.nip || ''),
+          it.nama || '-',
+          it.departemen || '-',
+          it.subDepartemen || '-',
+          it.cabangId || '-',
+          Number(it.totalMasuk || 0),
+          Number(sc.Pagi || 0),
+          Number(sc.Midle || 0),
+          Number(sc.Sore || 0),
+          Number(sc.Full || 0),
+          Number(it.totalLibur || 0),
+          Number(it.totalIzin || 0),
+          Number(it.totalJamKerja || 0),
+          Number(it.totalLemburJam || 0)
+        ]);
       }
-      ws = XLSX.utils.json_to_sheet(mRows);
-      ws['!cols'] = [{wch:14},{wch:24},{wch:16},{wch:20},{wch:15},{wch:18},{wch:12},{wch:12},{wch:12},{wch:12},{wch:18},{wch:16},{wch:16},{wch:16}];
+
+      ws = XLSX.utils.aoa_to_sheet(mAoa);
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 13 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 13 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+        { s: { r: 2, c: 5 }, e: { r: 2, c: 9 } }
+      ];
+      ws['!rows'] = [{ hpt: 28 }, { hpt: 20 }, { hpt: 22 }, { hpt: 8 }, { hpt: 24 }];
+      ws['!autofilter'] = { ref: "A5:N" + (5 + mList.length) };
+
+      applyExcelRangeStyle(ws, 0, 0, 0, 13, bannerStyle);
+      applyExcelRangeStyle(ws, 1, 1, 0, 13, subBannerStyle);
+      applyExcelRangeStyle(ws, 2, 2, 0, 4, infoLabelStyle);
+      applyExcelRangeStyle(ws, 2, 2, 5, 9, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '166534' } }, fill: { fgColor: { rgb: 'DCFCE7' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('86EFAC') });
+      applyExcelRangeStyle(ws, 2, 2, 10, 10, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '92400E' } }, fill: { fgColor: { rgb: 'FEF3C7' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('FCD34D') });
+      applyExcelRangeStyle(ws, 2, 2, 11, 11, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '0369A1' } }, fill: { fgColor: { rgb: 'E0F2FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('7DD3FC') });
+      applyExcelRangeStyle(ws, 2, 2, 12, 13, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '4C1D95' } }, fill: { fgColor: { rgb: 'EDE9FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('C4B5FD') });
+      applyExcelRangeStyle(ws, 4, 4, 0, 13, tableHeaderStyle);
+
+      for (var mr = 0; mr < mList.length; mr++) {
+        var rIdx = 5 + mr;
+        var rowItem = mList[mr];
+        var baseBg = (mr % 2 === 1) ? 'F8FAFC' : 'FFFFFF';
+        ws['!rows'][rIdx] = { hpt: 20 };
+
+        for (var mc = 0; mc <= 13; mc++) {
+          var cellAddr = XLSX.utils.encode_cell({ r: rIdx, c: mc });
+          if (!ws[cellAddr]) continue;
+          var cellFill = baseBg;
+          var cellTxt = '0F172A';
+          var isCellBold = (mc === 0 || mc === 1);
+          var hAlign = (mc >= 1 && mc <= 4) ? 'left' : 'center';
+
+          if (mc === 5) { cellFill = 'ECFDF5'; cellTxt = '166534'; isCellBold = true; }
+          else if (mc === 10 && Number(rowItem.totalLibur || 0) > 0) { cellFill = 'FEF3C7'; cellTxt = '92400E'; isCellBold = true; }
+          else if (mc === 11 && Number(rowItem.totalIzin || 0) > 0) { cellFill = 'E0F2FE'; cellTxt = '0369A1'; isCellBold = true; }
+          else if (mc === 13 && Number(rowItem.totalLemburJam || 0) > 0) { cellFill = 'EDE9FE'; cellTxt = '5B21B6'; isCellBold = true; }
+
+          if (mc === 0) { ws[cellAddr].t = 's'; ws[cellAddr].z = '@'; }
+          ws[cellAddr].s = {
+            font: { name: 'Calibri', sz: 10, bold: isCellBold, color: { rgb: cellTxt } },
+            fill: { fgColor: { rgb: cellFill } },
+            alignment: { horizontal: hAlign, vertical: 'center' },
+            border: makeExcelCellBorder('CBD5E1')
+          };
+        }
+      }
+
+      ws['!cols'] = computeExcelAutoColWidths(mAoa, 4, [13, 24, 14, 18, 15, 16, 11, 11, 11, 11, 16, 15, 15, 16], 34);
     } else {
       var emp = rep.employee || {};
+      var scEmp = rep.shiftCounts || {};
       filename = "Laporan_Presensi_" + (emp.nama || 'Karyawan').replace(/\s+/g, '_') + "_" + rep.bulanText + "_" + rep.tahun + ".xlsx";
-      var dRows = [];
       var dList = rep.dailyRecords || [];
+
+      var dAoa = [
+        ["LAPORAN REKAPITULASI PRESENSI KARYAWAN — " + companyName.toUpperCase(), "", "", "", "", "", "", "", "", ""],
+        ["Periode Laporan: " + rep.bulanText + " " + rep.tahun + "   |   Tanggal Ekspor: " + printedAt, "", "", "", "", "", "", "", "", ""],
+        ["Nama Pegawai", "", emp.nama || '-', "", "", "Cabang Penugasan", "", emp.cabangId || '-', "", ""],
+        ["NIP Pegawai", "", String(emp.nip || '-'), "", "", "Departemen / Posisi", "", (emp.departemen || '-') + " (" + (emp.subDepartemen || '-') + ")", "", ""],
+        [
+          "Masuk: " + rep.totalMasuk + " Hari", "",
+          "Shift: Pagi " + (scEmp.Pagi || 0) + " | Midle " + (scEmp.Midle || 0) + " | Sore " + (scEmp.Sore || 0) + " | Full " + (scEmp.Full || 0), "", "",
+          "Libur: " + rep.totalLibur + " Hari  •  Izin: " + rep.totalIzin + " Hari", "",
+          "Total Kerja: " + rep.totalJamKerja + " Jam (Lembur: " + rep.totalLemburJam + " Jam)", "", ""
+        ],
+        [
+          "Legenda Warna:", "",
+          "Kerja Normal (Putih/Abu)", "",
+          "Ada Lembur (Ungu Lembut)", "",
+          "Hari Libur / Off (Kuning Amber)", "",
+          "Izin / Cuti / Sakit (Biru)", ""
+        ],
+        ["", "", "", "", "", "", "", "", "", ""],
+        ["No", "Tanggal", "Shift Kerja", "Jam Masuk", "Jam Pulang", "Durasi Jam Kerja", "Jam Lembur", "Status Kehadiran", "Cabang", "Keterangan"]
+      ];
+
       for (var j = 0; j < dList.length; j++) {
         var r = dList[j];
-        dRows.push({
-          "No": (j + 1),
-          "Tanggal": r.tanggal,
-          "Shift Kerja": r.shift,
-          "Jam Masuk": r.jamMasuk,
-          "Jam Pulang": r.jamKeluar,
-          "Durasi Jam Kerja": r.lamaJam,
-          "Jam Lembur": r.jamLembur,
-          "Status Kehadiran": r.status,
-          "Cabang": r.cabang,
-          "Keterangan": r.keterangan
-        });
+        var theme = getMonthlyRowVisualTheme(r.shift, r.status, r.jamLembur, j);
+        var dtStr = formatReportDateWithDay(r.tanggal);
+        var inStr = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : (r.jamMasuk || '-');
+        var outStr = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : (r.jamKeluar || '-');
+
+        dAoa.push([
+          (j + 1),
+          dtStr,
+          r.shift || '-',
+          inStr,
+          outStr,
+          r.lamaJam || '-',
+          r.jamLembur || '0 Jam 0 Menit',
+          r.status || '-',
+          r.cabang || '-',
+          r.keterangan || '-'
+        ]);
       }
-      ws = XLSX.utils.json_to_sheet(dRows);
-      ws['!cols'] = [{wch:6},{wch:14},{wch:14},{wch:14},{wch:14},{wch:18},{wch:15},{wch:22},{wch:20},{wch:25}];
+
+      ws = XLSX.utils.aoa_to_sheet(dAoa);
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 1 } },
+        { s: { r: 2, c: 2 }, e: { r: 2, c: 4 } },
+        { s: { r: 2, c: 5 }, e: { r: 2, c: 6 } },
+        { s: { r: 2, c: 7 }, e: { r: 2, c: 9 } },
+        { s: { r: 3, c: 0 }, e: { r: 3, c: 1 } },
+        { s: { r: 3, c: 2 }, e: { r: 3, c: 4 } },
+        { s: { r: 3, c: 5 }, e: { r: 3, c: 6 } },
+        { s: { r: 3, c: 7 }, e: { r: 3, c: 9 } },
+        { s: { r: 4, c: 0 }, e: { r: 4, c: 1 } },
+        { s: { r: 4, c: 2 }, e: { r: 4, c: 4 } },
+        { s: { r: 4, c: 5 }, e: { r: 4, c: 6 } },
+        { s: { r: 4, c: 7 }, e: { r: 4, c: 9 } },
+        { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } },
+        { s: { r: 5, c: 2 }, e: { r: 5, c: 3 } },
+        { s: { r: 5, c: 4 }, e: { r: 5, c: 5 } },
+        { s: { r: 5, c: 6 }, e: { r: 5, c: 7 } },
+        { s: { r: 5, c: 8 }, e: { r: 5, c: 9 } }
+      ];
+
+      ws['!rows'] = [{ hpt: 28 }, { hpt: 20 }, { hpt: 20 }, { hpt: 20 }, { hpt: 22 }, { hpt: 19 }, { hpt: 8 }, { hpt: 24 }];
+      ws['!autofilter'] = { ref: "A8:J" + (8 + dList.length) };
+
+      applyExcelRangeStyle(ws, 0, 0, 0, 9, bannerStyle);
+      applyExcelRangeStyle(ws, 1, 1, 0, 9, subBannerStyle);
+      applyExcelRangeStyle(ws, 2, 2, 0, 1, infoLabelStyle);
+      applyExcelRangeStyle(ws, 2, 2, 2, 4, infoValueStyle);
+      applyExcelRangeStyle(ws, 2, 2, 5, 6, infoLabelStyle);
+      applyExcelRangeStyle(ws, 2, 2, 7, 9, infoValueStyle);
+      applyExcelRangeStyle(ws, 3, 3, 0, 1, infoLabelStyle);
+      applyExcelRangeStyle(ws, 3, 3, 2, 4, infoValueStyle, true);
+      applyExcelRangeStyle(ws, 3, 3, 5, 6, infoLabelStyle);
+      applyExcelRangeStyle(ws, 3, 3, 7, 9, infoValueStyle);
+
+      applyExcelRangeStyle(ws, 4, 4, 0, 1, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '166534' } }, fill: { fgColor: { rgb: 'DCFCE7' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('86EFAC') });
+      applyExcelRangeStyle(ws, 4, 4, 2, 4, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '0369A1' } }, fill: { fgColor: { rgb: 'E0F2FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('7DD3FC') });
+      applyExcelRangeStyle(ws, 4, 4, 5, 6, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '92400E' } }, fill: { fgColor: { rgb: 'FEF3C7' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('FCD34D') });
+      applyExcelRangeStyle(ws, 4, 4, 7, 9, { font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '4C1D95' } }, fill: { fgColor: { rgb: 'EDE9FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('C4B5FD') });
+
+      applyExcelRangeStyle(ws, 5, 5, 0, 1, { font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: '334155' } }, fill: { fgColor: { rgb: 'F1F5F9' } }, alignment: { horizontal: 'left', vertical: 'center' }, border: makeExcelCellBorder('CBD5E1') });
+      applyExcelRangeStyle(ws, 5, 5, 2, 3, { font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: '166534' } }, fill: { fgColor: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('BBF7D0') });
+      applyExcelRangeStyle(ws, 5, 5, 4, 5, { font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: '5B21B6' } }, fill: { fgColor: { rgb: 'EDE9FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('DDD6FE') });
+      applyExcelRangeStyle(ws, 5, 5, 6, 7, { font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: '92400E' } }, fill: { fgColor: { rgb: 'FEF3C7' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('FCD34D') });
+      applyExcelRangeStyle(ws, 5, 5, 8, 9, { font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: '0369A1' } }, fill: { fgColor: { rgb: 'E0F2FE' } }, alignment: { horizontal: 'center', vertical: 'center' }, border: makeExcelCellBorder('BAE6FD') });
+
+      applyExcelRangeStyle(ws, 7, 7, 0, 9, tableHeaderStyle);
+
+      for (var dr = 0; dr < dList.length; dr++) {
+        var rowRec = dList[dr];
+        var drTheme = getMonthlyRowVisualTheme(rowRec.shift, rowRec.status, rowRec.jamLembur, dr);
+        var excelRowIdx = 8 + dr;
+        ws['!rows'][excelRowIdx] = { hpt: 21 };
+
+        for (var dc = 0; dc <= 9; dc++) {
+          var dAddr = XLSX.utils.encode_cell({ r: excelRowIdx, c: dc });
+          if (!ws[dAddr]) continue;
+
+          var cBg = drTheme.bgHex;
+          var cTxt = drTheme.textHex;
+          var cBold = drTheme.bold || (dc === 1 || dc === 5 || dc === 7);
+          var cAlign = (dc === 8 || dc === 9) ? 'left' : 'center';
+
+          if (dc === 2 || dc === 7) {
+            cBg = (dc === 2 && drTheme.category === 'NORMAL') ? getShiftBadgeVisualTheme(rowRec.shift).bgHex : drTheme.badgeBgHex;
+            cTxt = (dc === 2 && drTheme.category === 'NORMAL') ? getShiftBadgeVisualTheme(rowRec.shift).textHex : drTheme.badgeTextHex;
+            cBold = true;
+          }
+
+          ws[dAddr].s = {
+            font: { name: 'Calibri', sz: 10, bold: cBold, color: { rgb: cTxt } },
+            fill: { fgColor: { rgb: cBg } },
+            alignment: { horizontal: cAlign, vertical: 'center', wrapText: (dc === 8 || dc === 9) },
+            border: makeExcelCellBorder(drTheme.category === 'LIBUR' ? 'F59E0B' : 'CBD5E1')
+          };
+        }
+      }
+
+      ws['!cols'] = computeExcelAutoColWidths(dAoa, 7, [6, 17, 13, 12, 12, 18, 16, 24, 24, 28], 42);
     }
 
     var wb = XLSX.utils.book_new();
