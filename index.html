@@ -1672,6 +1672,66 @@ body {
   flex-shrink: 0;
 }
 
+.camera-mode-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.camera-facing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.camera-facing-badge.is-back {
+  background: #ecfeff;
+  border-color: #a5f3fc;
+  color: #0e7490;
+}
+
+.btn-switch-camera {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid #0d9488;
+  background: #f0fdfa;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-switch-camera:hover {
+  background: #ccfbf1;
+  transform: translateY(-1px);
+}
+
+.btn-switch-camera:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.icon-svg-sm {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
 .camera-viewport-wrapper {
   position: relative;
   width: 100%;
@@ -1688,6 +1748,10 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transform: none;
+}
+
+#camera-video.camera-mirrored {
   transform: scaleX(-1);
 }
 
@@ -6619,9 +6683,18 @@ body {
         <button class="modal-close-btn" onclick="closeCameraModal()">&times;</button>
       </div>
       <div class="modal-body">
-        <!-- 1. LIVE STREAM VIEWPORT (UNTUK WEB BROWSER DESKTOP / CHROME MOBILE) -->
+        <!-- BAR KONTROL KAMERA DEPAN / BELAKANG -->
+        <div class="camera-mode-toolbar">
+          <span id="camera-facing-badge" class="camera-facing-badge">Kamera Depan (Selfie)</span>
+          <button type="button" id="btn-switch-camera" class="btn-switch-camera" onclick="switchCameraFacingMode()">
+            <svg class="icon-svg-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
+            <span id="btn-switch-camera-text">Putar ke Belakang</span>
+          </button>
+        </div>
+
+        <!-- 1. LIVE STREAM VIEWPORT (WAJIB KAMERA LIVE - ANTI GALERI) -->
         <div class="camera-viewport-wrapper" id="camera-viewport-live">
-          <video id="camera-video" autoplay playsinline muted></video>
+          <video id="camera-video" class="camera-mirrored" autoplay playsinline muted></video>
           <canvas id="camera-canvas" style="display: none;"></canvas>
           
           <div class="face-frame-overlay">
@@ -6639,30 +6712,26 @@ body {
 
         <!-- 2. PRATINJAU HASIL FOTO YANG BARU SAJA DIAMBIL -->
         <div id="camera-preview-captured-box" style="display: none; background: #0f172a; border-radius: 12px; overflow: hidden; margin-bottom: 12px; position: relative;">
-          <img id="camera-preview-captured-img" src="" alt="Foto Selfie Presensi" style="width: 100%; max-height: 320px; object-fit: contain; display: block; margin: 0 auto;">
+          <img id="camera-preview-captured-img" src="" alt="Foto Presensi" style="width: 100%; max-height: 320px; object-fit: contain; display: block; margin: 0 auto;">
           <div style="position: absolute; bottom: 8px; left: 8px; right: 8px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(4px); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.76rem; display: flex; justify-content: space-between; align-items: center; border: 1px solid rgba(255,255,255,0.15);">
-            <span style="color: #4ade80; font-weight: 700;">✅ Foto Selfie Siap Dikirim</span>
-            <label for="fallback-file-input" style="color: #38bdf8; font-weight: 700; cursor: pointer; text-decoration: underline;">Ulangi Foto 🔄</label>
+            <span style="color: #4ade80; font-weight: 700;">Foto Siap Dikirim</span>
+            <button type="button" onclick="restartCameraFromPreview()" style="background: none; border: none; color: #38bdf8; font-weight: 700; cursor: pointer; text-decoration: underline; padding: 0; font-size: inherit;">Ulangi Foto</button>
           </div>
         </div>
 
-        <!-- 3. KARTU PANDUAN NATIVE KAMERA (KHUSUS ANDROID APK / WEBVIEW - BEBAS BLOKIR) -->
+        <!-- 3. KARTU AKTIVASI ULANG KAMERA LIVE (GALERI DINONAKTIFKAN 100%) -->
         <div id="camera-apk-fallback-card" class="camera-apk-guide-box" style="display: none;">
-          <div class="camera-apk-icon-circle">
-            <svg class="icon-svg-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+          <div class="camera-apk-icon-circle" style="background: #fee2e2; color: #dc2626;">
+            <svg class="icon-svg-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
           </div>
-          <h4 style="margin: 8px 0 4px; color: #0f172a; font-size: 1rem;">Kamera Selfie Siap Digunakan</h4>
-          <p style="margin: 0 0 14px; font-size: 0.82rem; color: #475569; line-height: 1.45;">
-            Ketuk tombol hijau di bawah untuk langsung membuka kamera selfie HP Anda:
+          <h4 style="margin: 8px 0 4px; color: #0f172a; font-size: 1rem;">Kamera Live Wajib Diaktifkan</h4>
+          <p id="camera-blocked-reason-text" style="margin: 0 0 14px; font-size: 0.82rem; color: #475569; line-height: 1.5;">
+            Pengambilan foto dari galeri / file HP dinonaktifkan demi keamanan presensi. Harap izinkan akses kamera pada browser HP Anda, lalu ketuk tombol di bawah.
           </p>
-
-          <!-- DIRECT PHYSICAL TOUCH CAMERA TRIGGER (Anti-Blocked di Android WebView/APK) -->
-          <label for="fallback-file-input" class="btn-native-camera-trigger direct-touch-btn" id="lbl-native-camera-trigger">
-            <svg class="icon-svg-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-            <span>📸 Buka Kamera Selfie HP Sekarang</span>
-            <!-- INVISIBLE INPUT TOUCH TARGET COVERING ENTIRE BUTTON - STRICTLY CAMERA ONLY -->
-            <input type="file" id="fallback-file-input" accept="image/*" capture="user" onchange="handleFallbackPhotoSelect(event)" class="native-hidden-file-input">
-          </label>
+          <button type="button" class="btn-native-camera-trigger" onclick="retryLiveCameraStream()">
+            <svg class="icon-svg-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
+            <span>Aktifkan Ulang Kamera Live</span>
+          </button>
         </div>
 
         <div class="camera-status-note">
@@ -6887,6 +6956,45 @@ body {
       <button type="button" class="btn-primary-block" style="background: #f97316; border: none; padding: 12px; font-size: 0.95rem; font-weight: 700; border-radius: 10px; color: #fff; width: 100%; cursor: pointer; transition: background 0.2s;" onclick="closeModalLoginError()">
         Coba Lagi
       </button>
+    </div>
+  </div>
+
+
+
+  <!-- MODAL: PERINGATAN BLOKIR WAKTU HP MANUAL / TIDAK SINKRON SERVER -->
+  <div id="modal-time-sync-alert" class="modal-overlay">
+    <div class="modal-card" style="max-width: 440px; text-align: center; padding: 26px 22px;">
+      <div style="width: 64px; height: 64px; margin: 0 auto 14px; background: #fef3c7; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width: 32px; height: 32px;">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </div>
+      <h3 style="font-size: 1.15rem; font-weight: 800; color: #0f172a; margin: 0 0 8px 0;">Waktu HP Terdeteksi Tidak Otomatis</h3>
+      <p id="time-sync-alert-message" style="font-size: 0.88rem; color: #475569; line-height: 1.5; margin: 0 0 14px 0;">
+        Presensi dan kamera diblokir karena jam perangkat Anda tidak cocok dengan waktu resmi server.
+      </p>
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; margin-bottom: 14px; text-align: left; font-size: 0.82rem; color: #334155;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+          <span>Jam di HP Anda:</span>
+          <strong id="time-sync-client-val" style="color: #dc2626;">--:--:--</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+          <span>Jam Resmi Server:</span>
+          <strong id="time-sync-server-val" style="color: #059669;">--:--:--</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+          <span>Selisih Waktu:</span>
+          <strong id="time-sync-drift-val" style="color: #d97706;">--</strong>
+        </div>
+      </div>
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 0.8rem; color: #92400e; text-align: left; line-height: 1.45; margin-bottom: 18px;">
+        <strong>Cara Mengatasi:</strong> Buka <strong>Pengaturan HP &rarr; Sistem / Manajemen Umum &rarr; Tanggal &amp; Waktu</strong>, lalu aktifkan <strong>Tanggal &amp; Waktu Otomatis</strong> (gunakan waktu jaringan) dan pastikan internet aktif.
+      </div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <button type="button" class="btn-secondary" style="flex: 1; min-width: 110px; padding: 11px; border-radius: 10px; font-weight: 700;" onclick="closeModalTimeSyncAlert()">Tutup</button>
+        <button type="button" class="btn-primary" style="flex: 2; min-width: 160px; padding: 11px; border-radius: 10px; font-weight: 700;" onclick="retryAttendanceAfterTimeSync()">Cek Ulang &amp; Buka Kamera</button>
+      </div>
     </div>
   </div>
 
@@ -7972,6 +8080,13 @@ var appState = {
   timerInterval: null,
   currentGps: { lat: 0, lon: 0, accuracy: 0 },
   cameraStream: null,
+  cameraFacingMode: 'user',
+  isSwitchingCamera: false,
+  serverTimeOffsetMs: 0,
+  timeVerifiedAtClientMs: 0,
+  timeVerifiedAtPerfMs: null,
+  isTimeVerified: false,
+  isVerifyingTime: false,
   isAttendanceAction: 'Masuk', // 'Masuk', 'Pulang', atau 'Kunjungan'
   keteranganLuarRadius: '',
   pendingVisitData: null,
@@ -8207,10 +8322,55 @@ function initSavedLoginCredentials() {
   }
 }
 
+function getVerifiedServerNow() {
+  return new Date(Date.now() + (appState.serverTimeOffsetMs || 0));
+}
+
+function formatWibClockParts(dateObj) {
+  var baseMs = dateObj ? dateObj.getTime() : getVerifiedServerNow().getTime();
+  // Konversi deterministik ke UTC+7 (WIB) agar kebal terhadap manipulasi zona waktu HP
+  var w = new Date(baseMs + (7 * 60 * 60 * 1000));
+  var dd = ('0' + w.getUTCDate()).slice(-2);
+  var mm = ('0' + (w.getUTCMonth() + 1)).slice(-2);
+  var yyyy = w.getUTCFullYear();
+  var hh = ('0' + w.getUTCHours()).slice(-2);
+  var min = ('0' + w.getUTCMinutes()).slice(-2);
+  var ss = ('0' + w.getUTCSeconds()).slice(-2);
+  return {
+    dateStr: dd + '/' + mm + '/' + yyyy,
+    timeStr: hh + ':' + min + ':' + ss + ' WIB',
+    fullStr: dd + '/' + mm + '/' + yyyy + ' ' + hh + ':' + min + ':' + ss + ' WIB'
+  };
+}
+
+function formatLocalDeviceDateTime(ms) {
+  var d = new Date(ms);
+  var dd = ('0' + d.getDate()).slice(-2);
+  var mm = ('0' + (d.getMonth() + 1)).slice(-2);
+  var yyyy = d.getFullYear();
+  var hh = ('0' + d.getHours()).slice(-2);
+  var min = ('0' + d.getMinutes()).slice(-2);
+  var ss = ('0' + d.getSeconds()).slice(-2);
+  return dd + '/' + mm + '/' + yyyy + ' ' + hh + ':' + min + ':' + ss;
+}
+
+function formatDriftReadable(driftMs) {
+  var totalSec = Math.max(1, Math.round(driftMs / 1000));
+  var hrs = Math.floor(totalSec / 3600);
+  var mins = Math.floor((totalSec % 3600) / 60);
+  var secs = totalSec % 60;
+  var parts = [];
+  if (hrs > 0) parts.push(hrs + ' jam');
+  if (mins > 0) parts.push(mins + ' menit');
+  if (secs > 0 || parts.length === 0) parts.push(secs + ' detik');
+  return parts.join(' ');
+}
+
 function startLiveClock() {
   function tick() {
-    var now = new Date();
-    var timeStr = now.toLocaleTimeString('id-ID', { hour12: false }) + ' WIB';
+    var timeStr = appState.isTimeVerified
+      ? formatWibClockParts(getVerifiedServerNow()).timeStr
+      : (new Date().toLocaleTimeString('id-ID', { hour12: false }) + ' WIB');
     var clockEl = document.getElementById('live-clock');
     if (clockEl) clockEl.innerText = timeStr;
     var wmTime = document.getElementById('wm-time');
@@ -9891,12 +10051,214 @@ function scrollToStaffAction() {
 // ============================================================================
 // CAMERA CAPTURE WITH CORNER SIKU & WATERMARK
 // ============================================================================
+function showModalTimeSyncAlert(mode, clientMs, serverMs, driftMs, customReason) {
+  var modal = document.getElementById('modal-time-sync-alert');
+  var msgEl = document.getElementById('time-sync-alert-message');
+  var clientEl = document.getElementById('time-sync-client-val');
+  var serverEl = document.getElementById('time-sync-server-val');
+  var driftEl = document.getElementById('time-sync-drift-val');
+
+  if (clientEl) clientEl.innerText = clientMs ? formatLocalDeviceDateTime(clientMs) : formatLocalDeviceDateTime(Date.now());
+  if (serverEl) serverEl.innerText = serverMs ? formatWibClockParts(new Date(serverMs)).fullStr : 'Tidak Terhubung';
+
+  if (mode === 'network') {
+    if (msgEl) {
+      msgEl.innerText = customReason || "Gagal memverifikasi waktu resmi server. Kamera & presensi diblokir sementara hingga koneksi internet aktif untuk mencocokkan jam perangkat.";
+    }
+    if (driftEl) driftEl.innerText = 'Verifikasi Server Gagal (Offline / Timeout)';
+  } else if (mode === 'jump') {
+    if (msgEl) {
+      msgEl.innerText = "Terdeteksi perubahan jam HP secara manual saat kamera sedang terbuka! Pengambilan foto presensi dibatalkan otomatis.";
+    }
+    if (driftEl) driftEl.innerText = driftMs ? formatDriftReadable(driftMs) : 'Jam HP Berubah Saat Kamera Aktif';
+  } else {
+    if (msgEl) {
+      msgEl.innerText = "Kamera & presensi diblokir! Jam HP Anda berbeda dengan waktu resmi server (indikasi jam diatur manual, bukan otomatis jaringan).";
+    }
+    if (driftEl) driftEl.innerText = driftMs ? formatDriftReadable(driftMs) : '> 60 detik';
+  }
+
+  if (modal) {
+    modal.classList.add('active');
+  } else {
+    showToast(msgEl ? msgEl.innerText : "Waktu HP tidak sinkron dengan server. Aktifkan jam otomatis!", 'error');
+  }
+}
+
+function closeModalTimeSyncAlert() {
+  var modal = document.getElementById('modal-time-sync-alert');
+  if (modal) modal.classList.remove('active');
+}
+
+function retryAttendanceAfterTimeSync() {
+  closeModalTimeSyncAlert();
+  triggerAttendance(appState.isAttendanceAction || 'Masuk', appState.forceAttendanceNote);
+}
+
+function callStrictServerTimeApi(callback) {
+  var token = appState.sessionToken || '';
+  if (!token) {
+    try { token = localStorage.getItem('gata_session_token') || ''; } catch (e) {}
+  }
+
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    var doneGas = false;
+    var gasWatchdog = setTimeout(function() {
+      if (doneGas) return;
+      doneGas = true;
+      callback({ ok: false, reason: 'network', error: 'Waktu tunggu server habis' });
+    }, 12000);
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (doneGas) return;
+        doneGas = true;
+        clearTimeout(gasWatchdog);
+        var srvMs = (res && res.serverTimeMs) ? Number(res.serverTimeMs) : 0;
+        if (res && res.success && srvMs > 0) {
+          callback({ ok: true, serverTimeMs: srvMs });
+        } else {
+          callback({ ok: false, reason: 'network', error: (res && res.message) || 'Respons server tidak valid' });
+        }
+      })
+      .withFailureHandler(function(err) {
+        if (doneGas) return;
+        doneGas = true;
+        clearTimeout(gasWatchdog);
+        callback({ ok: false, reason: 'network', error: (err && err.message) || 'Koneksi GAS gagal' });
+      })
+      .apiSecureCall(token, 'apiGetServerTime', []);
+    return;
+  }
+
+  var apiUrl = appState.gasApiUrl || '';
+  if (!apiUrl) {
+    try { apiUrl = localStorage.getItem('gata_gas_api_url') || ''; } catch (e) {}
+    if (!apiUrl) apiUrl = DEFAULT_GAS_API_URL;
+  }
+
+  if (apiUrl === 'OFFLINE') {
+    callback({ ok: true, isOfflineDemo: true, serverTimeMs: Date.now() });
+    return;
+  }
+
+  var doneWeb = false;
+  var webWatchdog = setTimeout(function() {
+    if (doneWeb) return;
+    doneWeb = true;
+    callback({ ok: false, reason: 'network', error: 'Koneksi ke server waktu habis (timeout).' });
+  }, 12000);
+
+  function finishWeb(result) {
+    if (doneWeb) return;
+    doneWeb = true;
+    clearTimeout(webWatchdog);
+    callback(result);
+  }
+
+  function tryPingTimeFallback() {
+    var pingUrl = apiUrl + (apiUrl.indexOf('?') !== -1 ? '&' : '?') + 'action=ping&_t=' + Date.now();
+    fetch(pingUrl)
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      })
+      .then(function(txt) {
+        var pData = JSON.parse(txt);
+        var ms = (pData && pData.serverTimeMs) ? Number(pData.serverTimeMs) : (pData && pData.timestamp ? Date.parse(pData.timestamp) : 0);
+        if (pData && pData.success && ms > 0 && !isNaN(ms)) {
+          finishWeb({ ok: true, serverTimeMs: ms });
+        } else {
+          finishWeb({ ok: false, reason: 'network', error: 'Endpoint ping belum mengembalikan timestamp resmi.' });
+        }
+      })
+      .catch(function(errPing) {
+        finishWeb({ ok: false, reason: 'network', error: (errPing && errPing.message) || 'Gagal menghubungi server waktu.' });
+      });
+  }
+
+  fetch(apiUrl, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'apiGetServerTime', args: [], token: token }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  })
+  .then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  })
+  .then(function(rawText) {
+    var data = JSON.parse(rawText);
+    var srvMs = (data && data.serverTimeMs) ? Number(data.serverTimeMs) : 0;
+    if (data && data.success && srvMs > 0) {
+      finishWeb({ ok: true, serverTimeMs: srvMs });
+    } else if (data && data.message && String(data.message).indexOf('tidak terdaftar') !== -1) {
+      tryPingTimeFallback();
+    } else {
+      finishWeb({ ok: false, reason: 'network', error: (data && data.message) || 'Server gagal merespons waktu.' });
+    }
+  })
+  .catch(function(errFetch) {
+    finishWeb({ ok: false, reason: 'network', error: (errFetch && errFetch.message) || 'Tidak ada koneksi internet.' });
+  });
+}
+
+function verifyDeviceTimeSyncBeforeCamera(onVerified) {
+  if (appState.isVerifyingTime) return;
+  appState.isVerifyingTime = true;
+  appState.isTimeVerified = false;
+  showToast("Memverifikasi keaslian waktu HP terhadap server...", "info");
+
+  var tStart = Date.now();
+  callStrictServerTimeApi(function(res) {
+    appState.isVerifyingTime = false;
+    var tEnd = Date.now();
+
+    if (!res || !res.ok || !res.serverTimeMs) {
+      showModalTimeSyncAlert('network', tEnd, 0, 0, (res && res.error) ? ("Verifikasi jam server gagal (" + res.error + "). Kamera diblokir hingga internet terhubung dan jam HP sinkron.") : '');
+      return;
+    }
+
+    if (res.isOfflineDemo) {
+      appState.serverTimeOffsetMs = 0;
+      appState.timeVerifiedAtClientMs = tEnd;
+      appState.timeVerifiedAtPerfMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : null;
+      appState.isTimeVerified = true;
+      onVerified();
+      return;
+    }
+
+    var rtt = Math.max(0, tEnd - tStart);
+    var estimatedServerNow = res.serverTimeMs + Math.round(rtt / 2);
+    var driftMs = Math.abs(tEnd - estimatedServerNow);
+    var maxAllowedDriftMs = 60000; // Toleransi maksimal 60 detik
+
+    if (driftMs > maxAllowedDriftMs) {
+      appState.isTimeVerified = false;
+      showModalTimeSyncAlert('drift', tEnd, estimatedServerNow, driftMs);
+      return;
+    }
+
+    appState.serverTimeOffsetMs = estimatedServerNow - tEnd;
+    appState.timeVerifiedAtClientMs = tEnd;
+    appState.timeVerifiedAtPerfMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : null;
+    appState.isTimeVerified = true;
+    onVerified();
+  });
+}
+
 function triggerAttendance(actionType, withReason) {
+  if (appState.isVerifyingTime) {
+    showToast("Sedang memverifikasi jam perangkat...", "info");
+    return;
+  }
   appState.isAttendanceAction = actionType;
   appState.pendingPhotoBase64 = null;
   appState.keteranganLuarRadius = '';
   appState.forceAttendanceNote = Boolean(withReason);
-  openCameraModal(actionType);
+
+  verifyDeviceTimeSyncBeforeCamera(function() {
+    openCameraModal(actionType);
+  });
 }
 
 function openModalLuarRadius(dist, maxRadius, actionType, photoBase64) {
@@ -10287,32 +10649,53 @@ function testGasApiConnection() {
 }
 
 // ============================================================================
-// BATCH 22: CAMERA CONTROLLER (OPTIMAL UNTUK ANDROID APK WEBVIEW & BROWSER WEB)
+// BATCH 50: LIVE CAMERA CONTROLLER (SWITCH DEPAN/BELAKANG + ANTI GALERI 100%)
 // ============================================================================
-function isAndroidApkOrWebView() {
-  var ua = navigator.userAgent || '';
-  var isWv = /;\s*wv\)/i.test(ua);
-  var isNoGUM = !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia;
-  return isWv || isNoGUM;
+function updateCameraFacingUI() {
+  var isBack = (appState.cameraFacingMode === 'environment');
+  var badge = document.getElementById('camera-facing-badge');
+  var btnText = document.getElementById('btn-switch-camera-text');
+  var video = document.getElementById('camera-video');
+
+  if (badge) {
+    badge.innerText = isBack ? 'Kamera Belakang' : 'Kamera Depan (Selfie)';
+    badge.classList.toggle('is-back', isBack);
+  }
+  if (btnText) {
+    btnText.innerText = isBack ? 'Putar ke Depan' : 'Putar ke Belakang';
+  }
+  if (video) {
+    video.classList.toggle('camera-mirrored', !isBack);
+  }
 }
 
-function activateNativeCameraFallbackUI() {
+function activateLiveCameraBlockedUI(err) {
   stopCameraStream();
   var liveViewport = document.getElementById('camera-viewport-live');
-  var apkCard = document.getElementById('camera-apk-fallback-card');
+  var blockedCard = document.getElementById('camera-apk-fallback-card');
   var previewBox = document.getElementById('camera-preview-captured-box');
   var note = document.getElementById('camera-instruction-note');
   var btnText = document.getElementById('btn-capture-text');
+  var reasonEl = document.getElementById('camera-blocked-reason-text');
 
   if (liveViewport) liveViewport.style.display = 'none';
   if (previewBox) previewBox.style.display = 'none';
-  if (apkCard) apkCard.style.display = 'block';
+  if (blockedCard) blockedCard.style.display = 'block';
 
+  var errName = (err && err.name) ? String(err.name) : '';
+  var reasonText = 'Pengambilan foto dari galeri / file HP dinonaktifkan demi keamanan presensi. Harap izinkan akses kamera pada browser HP Anda, lalu ketuk tombol di bawah.';
+  if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+    reasonText = 'Izin kamera ditolak di browser HP Anda. Galeri tetap diblokir untuk keamanan presensi — aktifkan izin kamera di ikon gembok browser lalu ketuk tombol di bawah.';
+  } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+    reasonText = 'Perangkat kamera tidak ditemukan. Presensi wajib memakai kamera live (ambil file dari galeri dinonaktifkan).';
+  }
+
+  if (reasonEl) reasonEl.innerText = reasonText;
   if (note) {
-    note.innerText = 'Izin kamera belum aktif. Ketuk tombol hijau di atas untuk membuka kamera selfie ponsel Anda.';
+    note.innerText = 'Kamera live wajib diaktifkan. Pemilihan foto dari galeri dinonaktifkan.';
   }
   if (btnText) {
-    btnText.innerText = '📸 Buka Kamera Selfie';
+    btnText.innerText = 'Aktifkan Kamera Live';
   }
 }
 
@@ -10322,18 +10705,19 @@ function openCameraModal(actionType) {
   var note = document.getElementById('camera-instruction-note');
   var btnText = document.getElementById('btn-capture-text');
   var liveViewport = document.getElementById('camera-viewport-live');
-  var apkCard = document.getElementById('camera-apk-fallback-card');
+  var blockedCard = document.getElementById('camera-apk-fallback-card');
   var previewBox = document.getElementById('camera-preview-captured-box');
 
-  // Reset status tampilan modal: Utamakan LIVE CAMERA STREAM
+  // Default Kunjungan Driver = Kamera Belakang; Absen Masuk/Keluar = Kamera Depan (keduanya bebas diputar)
+  appState.cameraFacingMode = (actionType === 'Kunjungan') ? 'environment' : 'user';
   appState.pendingPhotoBase64 = null;
-  if (liveViewport) liveViewport.style.display = 'block';
-  if (apkCard) apkCard.style.display = 'none';
-  if (previewBox) previewBox.style.display = 'none';
-  if (btnText) btnText.innerText = 'Ambil Foto Selfie';
+  appState.isSwitchingCamera = false;
+  updateCameraFacingUI();
 
-  var inp1 = document.getElementById('fallback-file-input');
-  if (inp1) inp1.value = '';
+  if (liveViewport) liveViewport.style.display = 'block';
+  if (blockedCard) blockedCard.style.display = 'none';
+  if (previewBox) previewBox.style.display = 'none';
+  if (btnText) btnText.innerText = (actionType === 'Kunjungan') ? 'Ambil Foto Lokasi' : 'Ambil Foto';
 
   // Refresh lock GPS presisi tinggi saat modal kamera dibuka
   if (navigator.geolocation) {
@@ -10351,34 +10735,59 @@ function openCameraModal(actionType) {
   }
 
   if (actionType === 'Kunjungan') {
-    title.innerText = 'Foto Kunjungan Driver di Lokasi';
-    note.innerText = 'Posisikan kamera ke lokasi atau agen kunjungan. Watermark GPS & waktu dibubuhkan otomatis.';
+    title.innerText = 'Kamera Verifikasi Kunjungan Driver';
+    note.innerText = 'Gunakan kamera belakang untuk lokasi/toko atau putar ke depan untuk selfie. Watermark GPS & waktu server dibubuhkan otomatis.';
   } else {
-    title.innerText = (actionType === 'Masuk' ? 'Kamera Selfie Absen Masuk' : 'Kamera Selfie Absen Keluar');
-    note.innerText = 'Posisikan wajah Anda di dalam bingkai siku. Foto selfie akan dibubuhi nama toko & watermark GPS.';
+    title.innerText = (actionType === 'Masuk' ? 'Kamera Verifikasi Absen Masuk' : 'Kamera Verifikasi Absen Keluar');
+    note.innerText = 'Ambil foto langsung melalui kamera live (depan/belakang). Pengambilan dari galeri dinonaktifkan.';
   }
 
   modal.classList.add('active');
-
-  // Selalu luncurkan live selfie camera stream secara otomatis
-  startCameraStream();
+  startCameraStream(false);
 }
 
 function closeCameraModal() {
   var modal = document.getElementById('modal-camera');
   if (modal) modal.classList.remove('active');
+  appState.isSwitchingCamera = false;
   stopCameraStream();
 }
 
-function triggerNativeCameraInput() {
-  var fileInput = document.getElementById('fallback-file-input');
-  if (fileInput) {
-    fileInput.click();
-  }
+function retryLiveCameraStream() {
+  startCameraStream(false);
+}
+
+function restartCameraFromPreview() {
+  appState.pendingPhotoBase64 = null;
+  var previewBox = document.getElementById('camera-preview-captured-box');
+  if (previewBox) previewBox.style.display = 'none';
+  startCameraStream(false);
+}
+
+function switchCameraFacingMode() {
+  if (appState.isSwitchingCamera) return;
+  appState.isSwitchingCamera = true;
+
+  var btnSwitch = document.getElementById('btn-switch-camera');
+  if (btnSwitch) btnSwitch.disabled = true;
+
+  appState.cameraFacingMode = (appState.cameraFacingMode === 'user') ? 'environment' : 'user';
+  updateCameraFacingUI();
+
+  // Matikan stream kamera aktif dulu sebelum mengganti lensa (mencegah layar hitam di Android)
+  stopCameraStream();
+  setTimeout(function() {
+    var modalEl = document.getElementById('modal-camera');
+    if (!modalEl || !modalEl.classList.contains('active')) {
+      appState.isSwitchingCamera = false;
+      if (btnSwitch) btnSwitch.disabled = false;
+      return;
+    }
+    startCameraStream(true);
+  }, 140);
 }
 
 function handleCaptureButtonClick() {
-  // Jika sudah ada foto selfie yang terpilih di pratinjau, lanjutkan proses
   if (appState.pendingPhotoBase64) {
     var photo = appState.pendingPhotoBase64;
     appState.pendingPhotoBase64 = null;
@@ -10395,25 +10804,27 @@ function handleCaptureButtonClick() {
     return;
   }
 
-  // Jika kamera stream belum siap, cek apakah fallback aktif
-  var apkCard = document.getElementById('camera-apk-fallback-card');
-  if (apkCard && apkCard.style.display !== 'none') {
-    triggerNativeCameraInput();
+  var blockedCard = document.getElementById('camera-apk-fallback-card');
+  if (blockedCard && blockedCard.style.display !== 'none') {
+    retryLiveCameraStream();
     return;
   }
 
   showToast("Kamera sedang memuat, mohon tunggu sebentar...", "info");
-  startCameraStream();
+  startCameraStream(false);
 }
 
-function startCameraStream() {
+function startCameraStream(isSwitchAttempt) {
   var video = document.getElementById('camera-video');
   var liveViewport = document.getElementById('camera-viewport-live');
-  var apkCard = document.getElementById('camera-apk-fallback-card');
+  var blockedCard = document.getElementById('camera-apk-fallback-card');
   var note = document.getElementById('camera-instruction-note');
+  var btnSwitch = document.getElementById('btn-switch-camera');
+  var targetMode = appState.cameraFacingMode || 'user';
 
-  if (apkCard) apkCard.style.display = 'none';
+  if (blockedCard) blockedCard.style.display = 'none';
   if (liveViewport) liveViewport.style.display = 'block';
+  updateCameraFacingUI();
 
   if (video) {
     video.setAttribute('autoplay', '');
@@ -10428,14 +10839,46 @@ function startCameraStream() {
     appState.cameraWatchdog = null;
   }
 
+  function finishSwitchUnlock() {
+    appState.isSwitchingCamera = false;
+    if (btnSwitch) btnSwitch.disabled = false;
+  }
+
   if (!navigator || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    console.warn("MediaDevices getUserMedia tidak didukung pada browser ini.");
-    activateNativeCameraFallbackUI();
+    finishSwitchUnlock();
+    activateLiveCameraBlockedUI({ name: 'NotSupportedError' });
     return;
   }
 
-  function bindStream(stream) {
+  function bindStream(stream, isFallbackGeneric) {
+    var modalEl = document.getElementById('modal-camera');
+    if (!modalEl || !modalEl.classList.contains('active')) {
+      if (stream && stream.getTracks) {
+        stream.getTracks().forEach(function(t) { t.stop(); });
+      }
+      finishSwitchUnlock();
+      return;
+    }
     appState.cameraStream = stream;
+    finishSwitchUnlock();
+
+    // Deteksi lensa aktual jika perangkat hanya memiliki 1 kamera (misal laptop)
+    try {
+      var tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
+      if (tracks.length > 0 && tracks[0].getSettings) {
+        var actualFacing = tracks[0].getSettings().facingMode;
+        if (actualFacing === 'user' || actualFacing === 'environment') {
+          appState.cameraFacingMode = actualFacing;
+          updateCameraFacingUI();
+          if (isSwitchAttempt && actualFacing !== targetMode) {
+            showToast("Perangkat ini hanya menyediakan kamera " + (actualFacing === 'user' ? 'depan' : 'belakang') + ".", "info");
+          }
+        } else if (isFallbackGeneric && isSwitchAttempt) {
+          showToast("Beralih ke kamera cadangan perangkat.", "info");
+        }
+      }
+    } catch (eSet) {}
+
     if (video) {
       video.srcObject = stream;
       var playPromise = video.play();
@@ -10447,35 +10890,43 @@ function startCameraStream() {
     }
   }
 
-  // Percobaan 1: Kamera Selfie / Depan dengan resolusi ideal
+  // Pastikan stream lama bersih sebelum membuka lensa baru
+  stopCameraStream();
+
+  // Percobaan 1: exact facingMode (memaksa pindah lensa depan <-> belakang di Android/iOS)
   navigator.mediaDevices.getUserMedia({
     video: {
-      facingMode: { ideal: 'user' },
+      facingMode: { exact: targetMode },
       width: { ideal: 640 },
       height: { ideal: 480 }
     },
     audio: false
   })
-  .then(bindStream)
+  .then(function(stream) { bindStream(stream, false); })
   .catch(function(err1) {
-    console.warn("Kamera ideal constraints gagal, mencoba fallback facingMode user:", err1);
-    // Percobaan 2: facingMode: 'user' standar
+    console.warn("Exact facingMode " + targetMode + " gagal, mencoba ideal facingMode:", err1);
+    // Percobaan 2: ideal facingMode
     navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' },
+      video: {
+        facingMode: { ideal: targetMode },
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
       audio: false
     })
-    .then(bindStream)
+    .then(function(stream) { bindStream(stream, false); })
     .catch(function(err2) {
-      console.warn("Kamera user facingMode gagal, mencoba fallback kamera default:", err2);
-      // Percobaan 3: Sembarang video stream
+      console.warn("Ideal facingMode " + targetMode + " gagal, mencoba kamera default:", err2);
+      // Percobaan 3: fallback sembarang video stream perangkat
       navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then(bindStream)
+        .then(function(stream) { bindStream(stream, true); })
         .catch(function(err3) {
-          console.error("Semua percobaan akses kamera gagal:", err3);
+          console.error("Semua percobaan akses kamera live gagal:", err3);
+          finishSwitchUnlock();
           if (note) {
-            note.innerText = '⚠️ Izin kamera belum diberikan. Harap izinkan akses kamera di browser ponsel Anda.';
+            note.innerText = 'Izin kamera wajib aktif (pengambilan file dari galeri diblokir).';
           }
-          activateNativeCameraFallbackUI();
+          activateLiveCameraBlockedUI(err3);
         });
     });
   });
@@ -10532,6 +10983,19 @@ function drawImageSmartCrop(ctx, mediaEl, targetWidth, targetHeight, isMirrored)
 }
 
 function takeSnapshot() {
+  // Deteksi jika pengguna mengubah jam HP di tengah proses kamera sedang terbuka
+  if (appState.timeVerifiedAtPerfMs !== null && typeof performance !== 'undefined' && performance.now) {
+    var elapsedPerf = performance.now() - appState.timeVerifiedAtPerfMs;
+    var expectedClientNow = appState.timeVerifiedAtClientMs + elapsedPerf;
+    var runtimeJump = Math.abs(Date.now() - expectedClientNow);
+    if (runtimeJump > 15000) {
+      appState.isTimeVerified = false;
+      closeCameraModal();
+      showModalTimeSyncAlert('jump', Date.now(), expectedClientNow + (appState.serverTimeOffsetMs || 0), runtimeJump);
+      return;
+    }
+  }
+
   var video = document.getElementById('camera-video');
   var canvas = document.getElementById('camera-canvas');
   if (!video || !canvas) return;
@@ -10542,8 +11006,9 @@ function takeSnapshot() {
   canvas.height = height;
 
   var ctx = canvas.getContext('2d');
-  // Render foto video dengan smart center-crop dan mirror
-  drawImageSmartCrop(ctx, video, width, height, true);
+  // Mirror hanya untuk kamera depan (user); kamera belakang jangan dibalik agar tulisan/lokasi terbaca normal
+  var isFrontCamera = (appState.cameraFacingMode !== 'environment');
+  drawImageSmartCrop(ctx, video, width, height, isFrontCamera);
 
   drawPhotoWatermark(ctx, width, height);
 
@@ -10553,55 +11018,6 @@ function takeSnapshot() {
   var base64Data = canvas.toDataURL('image/jpeg', 0.85);
   closeCameraModal();
   processAttendancePhotoCaptured(base64Data);
-}
-
-function handleFallbackPhotoSelect(e) {
-  var file = e.target.files && e.target.files[0];
-  if (!file) return;
-
-  var reader = new FileReader();
-  reader.onload = function(evt) {
-    var img = new Image();
-    img.onload = function() {
-      var canvas = document.getElementById('camera-canvas');
-      var width = 640;
-      var height = 480;
-      canvas.width = width;
-      canvas.height = height;
-      var ctx = canvas.getContext('2d');
-
-      // Smart center-crop: foto portrait kamera native HP dipotong simetris tanpa gepeng/melebar
-      drawImageSmartCrop(ctx, img, width, height, false);
-
-      drawPhotoWatermark(ctx, width, height);
-      playSuccessChime();
-      triggerHapticFeedback();
-
-      var base64 = canvas.toDataURL('image/jpeg', 0.85);
-      appState.pendingPhotoBase64 = base64;
-
-      // Tampilkan pratinjau foto hasil jepretan kamera secara instan
-      var previewBox = document.getElementById('camera-preview-captured-box');
-      var previewImg = document.getElementById('camera-preview-captured-img');
-      var liveViewport = document.getElementById('camera-viewport-live');
-      var apkCard = document.getElementById('camera-apk-fallback-card');
-      var btnText = document.getElementById('btn-capture-text');
-
-      if (previewImg) previewImg.src = base64;
-      if (previewBox) previewBox.style.display = 'block';
-      if (liveViewport) liveViewport.style.display = 'none';
-      if (apkCard) apkCard.style.display = 'none';
-      if (btnText) btnText.innerText = 'Gunakan Foto Ini & Lanjutkan';
-
-      // Langsung proses submit secara mulus setelah jeda 400ms agar user melihat pratinjau sejenak
-      setTimeout(function() {
-        closeCameraModal();
-        processAttendancePhotoCaptured(base64);
-      }, 400);
-    };
-    img.src = evt.target.result;
-  };
-  reader.readAsDataURL(file);
 }
 
 function processAttendancePhotoCaptured(base64Data) {
@@ -10662,15 +11078,8 @@ function drawPhotoWatermark(ctx, width, height) {
   var userNip = cleanDisplayNip((appState.currentUser && appState.currentUser.nip) ? appState.currentUser.nip : '-');
   var userSubdept = (appState.currentUser && appState.currentUser.subDepartemen) ? appState.currentUser.subDepartemen : 'Staff';
 
-  // Format Waktu Realtime
-  var now = new Date();
-  var d = String(now.getDate()).padStart(2, '0');
-  var m = String(now.getMonth() + 1).padStart(2, '0');
-  var y = now.getFullYear();
-  var hh = String(now.getHours()).padStart(2, '0');
-  var mm = String(now.getMinutes()).padStart(2, '0');
-  var ss = String(now.getSeconds()).padStart(2, '0');
-  var timeStr = d + '/' + m + '/' + y + ' ' + hh + ':' + mm + ':' + ss + ' WIB';
+  // Format Waktu Resmi Terverifikasi Server (WIB UTC+7)
+  var timeStr = formatWibClockParts(getVerifiedServerNow()).fullStr;
 
   // Baris 1: Identitas Karyawan (Putih)
   ctx.fillStyle = "#ffffff";
@@ -10718,7 +11127,8 @@ function submitAttendanceRecord(photoBase64) {
     longitude: gpsLon,
     accuracy: gpsAcc,
     photoBase64: photoBase64,
-    keteranganLuarRadius: appState.keteranganLuarRadius || ''
+    keteranganLuarRadius: appState.keteranganLuarRadius || '',
+    clientTimestampMs: Date.now()
   };
 
   showToast("Mengunggah data presensi...", 'success');
@@ -10815,6 +11225,7 @@ function handleKunjunganDriverSubmit(e) {
 function submitDriverVisitWithPhoto(photoBase64) {
   if (!appState.pendingVisitData) return;
   appState.pendingVisitData.photoBase64 = photoBase64;
+  appState.pendingVisitData.clientTimestampMs = Date.now();
 
   showToast("Menyimpan presensi kunjungan driver...", 'success');
   callBackend('apiSubmitKunjunganDriver', [appState.pendingVisitData], function(res) {
@@ -11623,19 +12034,12 @@ function switchLaporanMode(mode) {
   }
 }
 
-function initLaporanPerKaryawan() {
+function populateLaporanEmployeeDropdown(userList) {
   var empSelect = document.getElementById('lpk-select-emp');
-  if (!empSelect) return;
+  if (!empSelect || !userList || userList.length === 0) return;
 
   var currentVal = empSelect.value;
   empSelect.innerHTML = '<option value="ALL">📊 [SEMUA KARYAWAN - Matriks Ringkasan Bulanan]</option>';
-
-  var userList = [];
-  if (appState.users && appState.users.length > 0) {
-    userList = appState.users;
-  } else if (window.__masterMockUsers && window.__masterMockUsers.length > 0) {
-    userList = window.__masterMockUsers;
-  }
 
   for (var i = 0; i < userList.length; i++) {
     var u = userList[i];
@@ -11654,6 +12058,20 @@ function initLaporanPerKaryawan() {
   if (currentVal && currentVal !== 'ALL') {
     empSelect.value = currentVal;
   }
+}
+
+function initLaporanPerKaryawan() {
+  var empSelect = document.getElementById('lpk-select-emp');
+  if (!empSelect) return;
+
+  var userList = [];
+  if (appState.users && appState.users.length > 0) {
+    userList = appState.users;
+  } else if (window.__masterMockUsers && window.__masterMockUsers.length > 0) {
+    userList = window.__masterMockUsers;
+  }
+
+  populateLaporanEmployeeDropdown(userList);
 
   var monthSelect = document.getElementById('lpk-select-month');
   if (monthSelect && !monthSelect.dataset.initialized) {
@@ -11693,6 +12111,10 @@ function loadEmployeeMonthlyReport() {
 
 function renderEmployeeMonthlyReportUI(rep) {
   if (!rep) return;
+
+  if (rep.allEmployees && rep.allEmployees.length > 0) {
+    populateLaporanEmployeeDropdown(rep.allEmployees);
+  }
 
   var indView = document.getElementById('lpk-individual-summary');
   var matView = document.getElementById('lpk-matrix-view');
@@ -18015,6 +18437,15 @@ function simulateLocalBackend(funcName, args, callback) {
           totalPaklaring: (window.__masterMockPaklaring ? window.__masterMockPaklaring.length : 1),
           waktuSinkron: new Date().toLocaleString('id-ID') + " WIB"
         }
+      });
+    } else if (funcName === 'apiGetServerTime') {
+      var nowMock = new Date();
+      callback({
+        success: true,
+        serverTimeMs: nowMock.getTime(),
+        serverTimeIso: nowMock.toISOString(),
+        serverTimeWib: formatWibClockParts(nowMock).fullStr,
+        serverTimezone: 'Asia/Jakarta'
       });
     } else if (funcName === 'destroySessionToken' || funcName === 'apiLogout') {
       callback({
