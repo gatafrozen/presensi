@@ -12285,7 +12285,7 @@ function renderEmployeeMonthlyReportUI(rep) {
           '<td><strong>' + m.nip + '</strong></td>' +
           '<td><strong style="color: #0f172a;">' + m.nama + '</strong></td>' +
           '<td><span class="badge-dept">' + (m.departemen || '-') + '</span> ' + (m.subDepartemen ? '<span style="font-size: 0.8rem; color: #64748b;">(' + m.subDepartemen + ')</span>' : '') + '</td>' +
-          '<td>' + (m.cabangId || '-') + '</td>' +
+          '<td>' + formatBranchCodeAndName(m.cabangId, m.cabangDisplay, m.cabangNama) + '</td>' +
           '<td style="text-align: center;"><span style="background: #ecfdf5; color: #059669; padding: 3px 8px; border-radius: 6px; font-weight: 700;">' + m.totalMasuk + ' Hari</span></td>' +
           '<td style="text-align: center; color: #ea580c; font-weight: 600;">' + sPagi + '</td>' +
           '<td style="text-align: center; color: #0284c7; font-weight: 600;">' + sMidle + '</td>' +
@@ -12317,7 +12317,7 @@ function renderEmployeeMonthlyReportUI(rep) {
     if (empNipEl) empNipEl.innerText = emp.nip || '-';
     if (empDeptEl) empDeptEl.innerText = emp.departemen || '-';
     if (empSubdeptEl) empSubdeptEl.innerText = emp.subDepartemen || '-';
-    if (empCabangEl) empCabangEl.innerText = emp.cabangId || '-';
+    if (empCabangEl) empCabangEl.innerText = formatBranchCodeAndName(emp.cabangId, emp.cabangDisplay, emp.cabangNama);
     if (empPeriodEl) empPeriodEl.innerText = rep.bulanText + ' ' + rep.tahun;
 
     var mMasukEl = document.getElementById('lpk-metric-masuk');
@@ -12386,7 +12386,7 @@ function renderEmployeeMonthlyReportUI(rep) {
           '<td><strong>' + rec.lamaJam + '</strong></td>' +
           '<td style="color: #4f46e5; font-weight: 600;">' + rec.jamLembur + '</td>' +
           '<td><span class="' + statusClass + '">' + rec.status + '</span></td>' +
-          '<td>' + rec.cabang + '</td>' +
+          '<td>' + formatBranchCodeAndName(rec.cabangId || rec.cabang, rec.cabang, rec.cabangNama) + '</td>' +
           '<td style="font-size: 0.82rem; color: #64748b;">' + rec.keterangan + '</td>';
         tbodyDaily.appendChild(trD);
       }
@@ -12453,6 +12453,129 @@ function formatReportDateWithDay(dateStr) {
   return raw + " (" + dayShort[dtObj.getDay()] + ")";
 }
 
+function formatBranchCodeAndName(rawBranch, explicitDisplay, explicitName) {
+  if (explicitDisplay && String(explicitDisplay).indexOf(' - ') !== -1) {
+    return String(explicitDisplay);
+  }
+  var raw = String(rawBranch || '').trim();
+  if (!raw || raw === '-') return explicitName ? String(explicitName) : '-';
+  if (raw.toLowerCase() === 'multi-cabang') return 'Multi-Cabang - Semua Toko';
+  if (raw.indexOf(' - ') !== -1) return raw;
+
+  if (appState.branches && appState.branches.length > 0) {
+    var lower = raw.toLowerCase();
+    for (var b = 0; b < appState.branches.length; b++) {
+      var br = appState.branches[b];
+      var brId = String(br.id || '').trim();
+      var brNama = String(br.nama || '').trim();
+      if (brId.toLowerCase() === lower || brNama.toLowerCase() === lower) {
+        return (brId && brNama) ? (brId + ' - ' + brNama) : (brNama || brId || raw);
+      }
+    }
+  }
+  if (explicitName && explicitName !== '-' && explicitName !== raw) {
+    return raw + ' - ' + explicitName;
+  }
+  return raw;
+}
+
+/**
+ * Helper bersama anti-blank untuk ekspor PDF via html2pdf/html2canvas:
+ * Merender elemen pada koordinat (0, 0) di balik layar dan memakai onclone
+ * agar kanvas selalu memotret isi dokumen utuh tanpa terpotong top/left -9999px.
+ */
+function renderCleanPdfFromElement(cloneWrapper, targetWidth, pdfFileName, orientation, marginArr, successMsg, fallbackFn) {
+  cloneWrapper.id = 'gata-pdf-capture-target';
+  cloneWrapper.style.position = 'fixed';
+  cloneWrapper.style.top = '0px';
+  cloneWrapper.style.left = '0px';
+  cloneWrapper.style.width = targetWidth + 'px';
+  cloneWrapper.style.zIndex = '-9999';
+  cloneWrapper.style.pointerEvents = 'none';
+  cloneWrapper.style.margin = '0';
+  cloneWrapper.style.opacity = '1';
+  cloneWrapper.style.visibility = 'visible';
+
+  try {
+    var imgs = cloneWrapper.querySelectorAll('img');
+    for (var ii = 0; ii < imgs.length; ii++) {
+      var im = imgs[ii];
+      if (im.src && im.src.indexOf('http') === 0) {
+        im.setAttribute('crossorigin', 'anonymous');
+      }
+      im.onerror = function() { this.style.display = 'none'; };
+    }
+  } catch (eImg) {}
+
+  document.body.appendChild(cloneWrapper);
+
+  if (typeof html2pdf === 'undefined') {
+    if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+    if (typeof fallbackFn === 'function') fallbackFn();
+    return;
+  }
+
+  var opt = {
+    margin: marginArr || [10, 10, 10, 10],
+    filename: pdfFileName,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      scrollX: 0,
+      scrollY: 0,
+      x: 0,
+      y: 0,
+      width: targetWidth,
+      windowWidth: targetWidth,
+      backgroundColor: '#ffffff',
+      onclone: function(clonedDoc) {
+        var clonedRoot = clonedDoc.getElementById('gata-pdf-capture-target');
+        if (!clonedRoot) return;
+        var bodyChildren = clonedDoc.body ? clonedDoc.body.children : [];
+        for (var cIdx = 0; cIdx < bodyChildren.length; cIdx++) {
+          if (bodyChildren[cIdx] !== clonedRoot) {
+            bodyChildren[cIdx].style.display = 'none';
+          }
+        }
+        if (clonedDoc.documentElement) {
+          clonedDoc.documentElement.style.overflow = 'visible';
+          clonedDoc.documentElement.style.height = 'auto';
+        }
+        if (clonedDoc.body) {
+          clonedDoc.body.style.margin = '0';
+          clonedDoc.body.style.padding = '0';
+          clonedDoc.body.style.background = '#ffffff';
+          clonedDoc.body.style.overflow = 'visible';
+          clonedDoc.body.style.height = 'auto';
+        }
+        clonedRoot.style.position = 'relative';
+        clonedRoot.style.top = '0px';
+        clonedRoot.style.left = '0px';
+        clonedRoot.style.zIndex = '1';
+        clonedRoot.style.opacity = '1';
+        clonedRoot.style.visibility = 'visible';
+      }
+    },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: orientation || 'portrait' },
+    pagebreak: { mode: ['css', 'legacy'] }
+  };
+
+  setTimeout(function() {
+    html2pdf().set(opt).from(cloneWrapper).save().then(function() {
+      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+      showToast(successMsg || ("Berkas PDF (" + pdfFileName + ") berhasil diunduh!"), "success");
+      playSuccessChime();
+    }).catch(function(err) {
+      console.warn("html2pdf error, fallback to print window:", err);
+      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+      if (typeof fallbackFn === 'function') fallbackFn();
+    });
+  }, 80);
+}
+
 function printEmployeeMonthlyReportPdf() {
   var rep = appState.currentEmployeeMonthlyReport;
   if (!rep) {
@@ -12473,11 +12596,8 @@ function printEmployeeMonthlyReportPdf() {
 
   showToast("Menyiapkan berkas PDF resmi laporan presensi...", "info");
 
+  var targetWidth = rep.isAll ? 1080 : 780;
   var cloneWrapper = document.createElement('div');
-  cloneWrapper.style.position = 'fixed';
-  cloneWrapper.style.top = '-9999px';
-  cloneWrapper.style.left = '-9999px';
-  cloneWrapper.style.width = rep.isAll ? '1080px' : '780px';
   cloneWrapper.style.background = '#ffffff';
   cloneWrapper.style.padding = '24px 28px';
   cloneWrapper.style.boxSizing = 'border-box';
@@ -12523,11 +12643,12 @@ function printEmployeeMonthlyReportPdf() {
       var liburBg = (itm.totalLibur > 0) ? '#fef3c7' : bgRow;
       var izinBg = (itm.totalIzin > 0) ? '#e0f2fe' : bgRow;
       var lemburBg = (itm.totalLemburJam > 0) ? '#ede9fe' : bgRow;
+      var matBranchText = formatBranchCodeAndName(itm.cabangId, itm.cabangDisplay, itm.cabangNama);
       contentHtml += '<tr style="background: ' + bgRow + '; page-break-inside: avoid;">' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 600;">' + itm.nip + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; font-weight: 700; color: #0f172a;">' + itm.nama + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px;">' + itm.departemen + ' (' + (itm.subDepartemen || '-') + ')</td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px;">' + itm.cabangId + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px;">' + matBranchText + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center; font-weight: 700; background: #ecfdf5; color: #166534;">' + itm.totalMasuk + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Pagi || 0) + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;">' + (sc.Midle || 0) + '</td>' +
@@ -12543,6 +12664,7 @@ function printEmployeeMonthlyReportPdf() {
   } else {
     var emp = rep.employee || {};
     var sc = rep.shiftCounts || {};
+    var empBranchText = formatBranchCodeAndName(emp.cabangId, emp.cabangDisplay, emp.cabangNama);
     contentHtml += 
       '<div style="background: #0f172a; color: #ffffff; border-radius: 8px 8px 0 0; padding: 8px 14px; font-size: 12px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;">IDENTITAS PEGAWAI &amp; PERIODE LAPORAN</div>' +
       '<div style="background: #f0fdfa; border: 1px solid #99f6e4; border-top: none; border-radius: 0 0 8px 8px; padding: 10px 14px; margin-bottom: 12px;">' +
@@ -12551,7 +12673,7 @@ function printEmployeeMonthlyReportPdf() {
             '<td style="width: 16%; color: #0f766e; font-weight: 700; padding: 3px 0;">Nama Pegawai</td>' +
             '<td style="width: 34%; font-weight: 800; color: #0f172a; padding: 3px 0;">: ' + (emp.nama || '-') + '</td>' +
             '<td style="width: 17%; color: #0f766e; font-weight: 700; padding: 3px 0;">Cabang Penugasan</td>' +
-            '<td style="width: 33%; font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + (emp.cabangId || '-') + '</td>' +
+            '<td style="width: 33%; font-weight: 700; color: #0f172a; padding: 3px 0;">: ' + empBranchText + '</td>' +
           '</tr>' +
           '<tr>' +
             '<td style="color: #0f766e; font-weight: 700; padding: 3px 0;">NIP Pegawai</td>' +
@@ -12596,7 +12718,7 @@ function printEmployeeMonthlyReportPdf() {
           '<span style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 2px 6px; border-radius: 4px;">Izin / Cuti</span>' +
         '</div>' +
       '</div>' +
-      '<table style="width: 100%; border-collapse: collapse; font-size: 9.8px;">' +
+      '<table style="width: 100%; border-collapse: collapse; font-size: 9.5px;">' +
         '<thead>' +
           '<tr style="background: #0f766e; color: #ffffff;">' +
             '<th style="border: 1px solid #0d9488; padding: 6px 4px; width: 24px; text-align: center;">No</th>' +
@@ -12621,6 +12743,7 @@ function printEmployeeMonthlyReportPdf() {
       var weightCss = theme.bold ? 'font-weight: 700;' : '';
       var jamKeluarShow = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : r.jamKeluar;
       var jamMasukShow = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : r.jamMasuk;
+      var dayBranchText = formatBranchCodeAndName(r.cabangId || r.cabang, r.cabang, r.cabangNama);
 
       contentHtml += '<tr style="background: #' + theme.bgHex + '; color: #' + theme.textHex + '; page-break-inside: avoid;">' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; ' + weightCss + '">' + (j + 1) + '</td>' +
@@ -12631,12 +12754,12 @@ function printEmployeeMonthlyReportPdf() {
         '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; font-weight: 700;">' + r.lamaJam + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; font-weight: 700; color: #' + (theme.category === 'LEMBUR' ? '5b21b6' : theme.textHex) + ';">' + r.jamLembur + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; text-align: center;"><span style="background: #' + theme.badgeBgHex + '; color: #' + theme.badgeTextHex + '; padding: 2px 6px; border-radius: 4px; font-weight: 700; display: inline-block;">' + (r.status || '-') + '</span></td>' +
-        '<td style="border: 1px solid #cbd5e1; padding: 5px; ' + weightCss + '">' + (r.cabang || '-') + '</td>' +
+        '<td style="border: 1px solid #cbd5e1; padding: 5px; ' + weightCss + '">' + dayBranchText + '</td>' +
         '<td style="border: 1px solid #cbd5e1; padding: 5px; ' + weightCss + '">' + (r.keterangan || '-') + '</td>' +
       '</tr>';
     }
     contentHtml += '</tbody></table>' +
-      '<div style="margin-top: 24px; display: flex; justify-content: space-between; font-size: 11px;">' +
+      '<div style="margin-top: 24px; display: flex; justify-content: space-between; font-size: 11px; page-break-inside: avoid;">' +
         '<div style="text-align: center; width: 200px;">' +
           'Mengetahui,<br><strong>Manager HRD & Operasional</strong>' +
           '<div style="height: 48px;"></div>' +
@@ -12652,7 +12775,7 @@ function printEmployeeMonthlyReportPdf() {
 
   cloneWrapper.innerHTML = 
     '<table style="width: 100%; border-bottom: 2px solid #0f766e; padding-bottom: 8px; margin-bottom: 12px; border-collapse: collapse;"><tr>' +
-      '<td style="width: 70px; vertical-align: middle;">' + (cLogo ? '<img src="' + cLogo + '" style="height: 50px; max-width: 65px; object-fit: contain; border-radius: 4px;">' : '') + '</td>' +
+      '<td style="width: 70px; vertical-align: middle;">' + (cLogo ? '<img src="' + cLogo + '" crossorigin="anonymous" onerror="this.style.display=\'none\'" style="height: 50px; max-width: 65px; object-fit: contain; border-radius: 4px;">' : '') + '</td>' +
       '<td style="vertical-align: middle;">' +
         '<h2 style="font-size: 17px; font-weight: 800; color: #0f172a; margin: 0; text-transform: uppercase;">' + cName + '</h2>' +
         '<p style="font-size: 10.5px; color: #64748b; margin: 2px 0 0 0;">' + cAddr + '<br>Telp: ' + cTelp + ' &bull; Email: ' + cEmail + '</p>' +
@@ -12664,30 +12787,17 @@ function printEmployeeMonthlyReportPdf() {
     '</tr></table>' +
     contentHtml;
 
-  document.body.appendChild(cloneWrapper);
-
-  if (typeof html2pdf !== 'undefined') {
-    var opt = {
-      margin: rep.isAll ? [8, 8, 8, 8] : [10, 10, 10, 10],
-      filename: pdfFileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, letterRendering: true, scrollY: 0 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: rep.isAll ? 'landscape' : 'portrait' }
-    };
-
-    html2pdf().set(opt).from(cloneWrapper).save().then(function() {
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-      showToast("Berkas PDF Laporan (" + pdfFileName + ") berhasil diunduh!", "success");
-      playSuccessChime();
-    }).catch(function(err) {
-      console.warn("html2pdf error, fallback to print window:", err);
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+  renderCleanPdfFromElement(
+    cloneWrapper,
+    targetWidth,
+    pdfFileName,
+    rep.isAll ? 'landscape' : 'portrait',
+    rep.isAll ? [8, 8, 8, 8] : [10, 10, 10, 10],
+    "Berkas PDF Laporan (" + pdfFileName + ") berhasil diunduh!",
+    function() {
       fallbackPrintReportWindow(rep, cName, cAddr, cTelp, cEmail, cLogo, contentHtml);
-    });
-  } else {
-    fallbackPrintReportWindow(rep, cName, cAddr, cTelp, cEmail, cLogo, contentHtml);
-    if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-  }
+    }
+  );
 }
 
 function fallbackPrintReportWindow(rep, cName, cAddr, cTelp, cEmail, cLogo, contentHtml) {
@@ -12833,7 +12943,7 @@ function exportEmployeeMonthlyReportExcel() {
           it.nama || '-',
           it.departemen || '-',
           it.subDepartemen || '-',
-          it.cabangId || '-',
+          formatBranchCodeAndName(it.cabangId, it.cabangDisplay, it.cabangNama),
           Number(it.totalMasuk || 0),
           Number(sc.Pagi || 0),
           Number(sc.Midle || 0),
@@ -12894,17 +13004,18 @@ function exportEmployeeMonthlyReportExcel() {
         }
       }
 
-      ws['!cols'] = computeExcelAutoColWidths(mAoa, 4, [13, 24, 14, 18, 15, 16, 11, 11, 11, 11, 16, 15, 15, 16], 34);
+      ws['!cols'] = computeExcelAutoColWidths(mAoa, 4, [13, 24, 14, 18, 28, 16, 11, 11, 11, 11, 16, 15, 15, 16], 44);
     } else {
       var emp = rep.employee || {};
       var scEmp = rep.shiftCounts || {};
+      var empBranchDisplay = formatBranchCodeAndName(emp.cabangId, emp.cabangDisplay, emp.cabangNama);
       filename = "Laporan_Presensi_" + (emp.nama || 'Karyawan').replace(/\s+/g, '_') + "_" + rep.bulanText + "_" + rep.tahun + ".xlsx";
       var dList = rep.dailyRecords || [];
 
       var dAoa = [
         ["LAPORAN REKAPITULASI PRESENSI KARYAWAN — " + companyName.toUpperCase(), "", "", "", "", "", "", "", "", ""],
         ["Periode Laporan: " + rep.bulanText + " " + rep.tahun + "   |   Tanggal Ekspor: " + printedAt, "", "", "", "", "", "", "", "", ""],
-        ["Nama Pegawai", "", emp.nama || '-', "", "", "Cabang Penugasan", "", emp.cabangId || '-', "", ""],
+        ["Nama Pegawai", "", emp.nama || '-', "", "", "Cabang Penugasan", "", empBranchDisplay, "", ""],
         ["NIP Pegawai", "", String(emp.nip || '-'), "", "", "Departemen / Posisi", "", (emp.departemen || '-') + " (" + (emp.subDepartemen || '-') + ")", "", ""],
         [
           "Masuk: " + rep.totalMasuk + " Hari", "",
@@ -12929,6 +13040,7 @@ function exportEmployeeMonthlyReportExcel() {
         var dtStr = formatReportDateWithDay(r.tanggal);
         var inStr = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : (r.jamMasuk || '-');
         var outStr = (theme.category === 'LIBUR' && r.jamMasuk === r.jamKeluar) ? '-' : (r.jamKeluar || '-');
+        var dayBrLabel = formatBranchCodeAndName(r.cabangId || r.cabang, r.cabang, r.cabangNama);
 
         dAoa.push([
           (j + 1),
@@ -12939,7 +13051,7 @@ function exportEmployeeMonthlyReportExcel() {
           r.lamaJam || '-',
           r.jamLembur || '0 Jam 0 Menit',
           r.status || '-',
-          r.cabang || '-',
+          dayBrLabel,
           r.keterangan || '-'
         ]);
       }
@@ -13024,7 +13136,7 @@ function exportEmployeeMonthlyReportExcel() {
         }
       }
 
-      ws['!cols'] = computeExcelAutoColWidths(dAoa, 7, [6, 17, 13, 12, 12, 18, 16, 24, 24, 28], 42);
+      ws['!cols'] = computeExcelAutoColWidths(dAoa, 7, [6, 17, 13, 12, 12, 18, 16, 24, 30, 28], 48);
     }
 
     var wb = XLSX.utils.book_new();
@@ -14598,37 +14710,26 @@ function downloadOfficialSalarySlipPdf(wrapperId, defaultFileName) {
     doc.close();
   }
 
-  // Jika pustaka html2pdf tersedia, unduh langsung sebagai berkas fisik PDF (.pdf)
+  // Jika pustaka html2pdf tersedia, unduh langsung sebagai berkas fisik PDF anti-blank
   if (typeof html2pdf !== 'undefined') {
     var cloneWrapper = document.createElement('div');
-    cloneWrapper.style.position = 'fixed';
-    cloneWrapper.style.top = '-9999px';
-    cloneWrapper.style.left = '-9999px';
-    cloneWrapper.style.width = '780px';
     cloneWrapper.style.background = '#ffffff';
     cloneWrapper.style.padding = '24px';
     cloneWrapper.style.boxSizing = 'border-box';
     cloneWrapper.className = 'slip-paper-wrapper';
     cloneWrapper.innerHTML = wrapper.innerHTML;
-    document.body.appendChild(cloneWrapper);
 
-    var opt = {
-      margin:       [8, 10, 8, 10],
-      filename:     pdfFileName,
-      image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true, logging: false, scrollY: 0, windowWidth: 800 },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-
-    html2pdf().set(opt).from(cloneWrapper).save().then(function() {
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-      showToast("Berkas PDF Slip Gaji (" + pdfFileName + ") berhasil diunduh!", "success");
-      playSuccessChime();
-    }).catch(function(err) {
-      console.warn("html2pdf save error, fallback to print window:", err);
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-      fallbackPrintWindow(wrapper, cleanTitle);
-    });
+    renderCleanPdfFromElement(
+      cloneWrapper,
+      780,
+      pdfFileName,
+      'portrait',
+      [8, 10, 8, 10],
+      "Berkas PDF Slip Gaji (" + pdfFileName + ") berhasil diunduh!",
+      function() {
+        fallbackPrintWindow(wrapper, cleanTitle);
+      }
+    );
   } else {
     fallbackPrintWindow(wrapper, cleanTitle);
   }
@@ -16387,39 +16488,22 @@ function downloadCurrentPaklaringPdf() {
   showToast("Mengunduh berkas fisik PDF Surat Paklaring...", "info");
 
   var cloneWrapper = document.createElement('div');
-  cloneWrapper.style.position = 'fixed';
-  cloneWrapper.style.top = '-9999px';
-  cloneWrapper.style.left = '-9999px';
-  cloneWrapper.style.width = '760px';
   cloneWrapper.style.background = '#ffffff';
   cloneWrapper.style.padding = '20px 24px';
   cloneWrapper.style.boxSizing = 'border-box';
   cloneWrapper.innerHTML = container.innerHTML;
 
-  document.body.appendChild(cloneWrapper);
-
-  if (typeof html2pdf !== 'undefined') {
-    var opt = {
-      margin: [10, 10, 10, 10],
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, letterRendering: true, scrollY: 0 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-
-    html2pdf().set(opt).from(cloneWrapper).save().then(function() {
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-      showToast("Berkas PDF Surat Paklaring (" + fileName + ") berhasil diunduh!", "success");
-      playSuccessChime();
-    }).catch(function(err) {
-      console.warn("html2pdf save error, fallback to print:", err);
-      if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+  renderCleanPdfFromElement(
+    cloneWrapper,
+    760,
+    fileName,
+    'portrait',
+    [10, 10, 10, 10],
+    "Berkas PDF Surat Paklaring (" + fileName + ") berhasil diunduh!",
+    function() {
       fallbackPrintPaklaring(container);
-    });
-  } else {
-    fallbackPrintPaklaring(container);
-    if (cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-  }
+    }
+  );
 }
 
 function fallbackPrintPaklaring(container) {
