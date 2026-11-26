@@ -8885,24 +8885,21 @@ function fallbackGpsToBranchOrCenter() {
   if (badge) badge.className = 'gps-status-bar out-range';
 }
 
-function sanitizeCoordinate(val) {
+function sanitizeCoordinate(val, axis) {
   if (val === null || val === undefined) return 0;
   var clean = String(val).replace(',', '.').trim();
   var num = parseFloat(clean) || 0;
-  // Jika lintang Indonesia (-11 s.d. +6) kehilangan desimal (misal -715.189 -> -7.15189)
-  if (Math.abs(num) > 12 && Math.abs(num) < 40) {
+  if (num === 0 || isNaN(num)) return 0;
+
+  // Wilayah Indonesia: lintang (-11 s.d. +6 -> |lat| <= 12), bujur (95 s.d. 141 -> |lon| <= 180)
+  var maxLimit = (axis === 'lat') ? 12 : 180;
+  while (Math.abs(num) > maxLimit) {
+    num = num / 10;
+  }
+  // Jika dipanggil tanpa parameter axis, koordinat negatif di bawah -12 pasti lintang selatan yang kurang dibagi 10
+  if (!axis && num < -12) {
     while (Math.abs(num) > 12) {
       num = num / 10;
-    }
-  } else if (Math.abs(num) > 180) {
-    // Jika koordinat ribuan/jutaan tanpa desimal (misal -7151890)
-    while (Math.abs(num) > 180) {
-      num = num / 10;
-    }
-    if (Math.abs(num) > 12 && Math.abs(num) < 40) {
-      while (Math.abs(num) > 12) {
-        num = num / 10;
-      }
     }
   }
   return num;
@@ -8944,8 +8941,8 @@ function updateGpsStatusBadge() {
     targetBranchEl.innerText = "🏢 Cabang Target: " + userBranch.nama;
   }
 
-  var bLat = sanitizeCoordinate(userBranch.latitude);
-  var bLon = sanitizeCoordinate(userBranch.longitude);
+  var bLat = sanitizeCoordinate(userBranch.latitude, 'lat');
+  var bLon = sanitizeCoordinate(userBranch.longitude, 'lon');
   var rawDist = calcHaversineMeters(appState.currentGps.lat, appState.currentGps.lon, bLat, bLon);
   var maxRadius = parseInt(appState.settings.RADIUS_METER, 10) || 30;
   var allowedRadius = Math.max(maxRadius, 100);
@@ -9005,8 +9002,8 @@ function getUserBranchObject() {
       for (var i = 0; i < appState.branches.length; i++) {
         var b = appState.branches[i];
         if (b.latitude) {
-          var bLat = sanitizeCoordinate(b.latitude);
-          var bLon = sanitizeCoordinate(b.longitude);
+          var bLat = sanitizeCoordinate(b.latitude, 'lat');
+          var bLon = sanitizeCoordinate(b.longitude, 'lon');
           var d = calcHaversineMeters(appState.currentGps.lat, appState.currentGps.lon, bLat, bLon);
           if (d < closestD) {
             closestD = d;
@@ -10319,8 +10316,8 @@ function quickAlignToStoreFromModal() {
     showToast("Cabang toko penugasan belum terdefinisi.", 'warning');
     return;
   }
-  var bLat = sanitizeCoordinate(branch.latitude);
-  var bLon = sanitizeCoordinate(branch.longitude);
+  var bLat = sanitizeCoordinate(branch.latitude, 'lat');
+  var bLon = sanitizeCoordinate(branch.longitude, 'lon');
   appState.currentGps.lat = bLat;
   appState.currentGps.lon = bLon;
   appState.currentGps.accuracy = 3;
@@ -10723,8 +10720,8 @@ function openCameraModal(actionType) {
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(function(pos) {
       if (pos && pos.coords) {
-        var cLat = sanitizeCoordinate(pos.coords.latitude);
-        var cLon = sanitizeCoordinate(pos.coords.longitude);
+        var cLat = sanitizeCoordinate(pos.coords.latitude, 'lat');
+        var cLon = sanitizeCoordinate(pos.coords.longitude, 'lon');
         var cAcc = pos.coords.accuracy || 10;
         appState.currentGps = { lat: cLat, lon: cLon, accuracy: cAcc };
         updateGpsStatusBadge(cLat, cLon, cAcc);
@@ -11160,8 +11157,8 @@ function processAttendancePhotoCaptured(base64Data) {
   var dist = 0;
   var effectiveDist = 0;
   if (branchObj && branchObj.latitude) {
-    var bLat = sanitizeCoordinate(branchObj.latitude);
-    var bLon = sanitizeCoordinate(branchObj.longitude);
+    var bLat = sanitizeCoordinate(branchObj.latitude, 'lat');
+    var bLon = sanitizeCoordinate(branchObj.longitude, 'lon');
     dist = calcHaversineMeters(appState.currentGps.lat, appState.currentGps.lon, bLat, bLon);
     var acc = Math.round(appState.currentGps.accuracy || 0);
     effectiveDist = Math.max(0, dist - Math.round(acc * 0.8));
@@ -13764,8 +13761,8 @@ function openModalViewAttendanceLocation(idTransaksi, nip, nama, shift, timestam
 
   // Hitung jarak ke kantor cabang
   var distanceMeters = 0;
-  var branchLat = branchObj ? sanitizeCoordinate(branchObj.latitude || branchObj.lat || -7.117217) : -7.117217;
-  var branchLon = branchObj ? sanitizeCoordinate(branchObj.longitude || branchObj.lon || 112.027583) : 112.027583;
+  var branchLat = branchObj ? sanitizeCoordinate(branchObj.latitude || branchObj.lat || -7.117217, 'lat') : -7.117217;
+  var branchLon = branchObj ? sanitizeCoordinate(branchObj.longitude || branchObj.lon || 112.027583, 'lon') : 112.027583;
   var branchName = branchObj ? branchObj.nama : (cabang || 'Kantor Cabang');
 
   if (hasGps) {
@@ -17051,8 +17048,8 @@ function loadBranchesAdmin() {
 
   for (var i = 0; i < appState.branches.length; i++) {
     var b = appState.branches[i];
-    var sLat = sanitizeCoordinate(b.latitude);
-    var sLon = sanitizeCoordinate(b.longitude);
+    var sLat = sanitizeCoordinate(b.latitude, 'lat');
+    var sLon = sanitizeCoordinate(b.longitude, 'lon');
     var safeName = cleanDisplayText(b.nama).replace(/'/g, "\\'");
     var safeAlamat = cleanDisplayText(b.alamat || '').replace(/'/g, "\\'");
     var safeQr = (b.qrCode || b.nama).replace(/'/g, "\\'");
@@ -17084,8 +17081,8 @@ function loadBranchesAdmin() {
 }
 
 function selectBranchToMap(id, lat, lon, nama, alamat) {
-  var cleanLat = sanitizeCoordinate(lat);
-  var cleanLon = sanitizeCoordinate(lon);
+  var cleanLat = sanitizeCoordinate(lat, 'lat');
+  var cleanLon = sanitizeCoordinate(lon, 'lon');
 
   document.getElementById('branch-id').value = id;
   document.getElementById('branch-name').value = nama;
